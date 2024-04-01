@@ -1,0 +1,7 @@
+services:
+  krust-cross-win:
+    image: ghcr.io/mglolenstine/gtk4-cross:rust-gtk-4.8
+    volumes:
+      - .:/mnt:z
+    command: bash -c "dnf -y install mingw64-gcc-c++ gtksourceview5-devel && build --release && package"
+

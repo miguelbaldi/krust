@@ -1,0 +1,26 @@
+[package]
+name = "krust"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.51"
+gtk = { version = "0.8.1", package = "gtk4", features = ["v4_8"] }
+relm4 = "0.8.0"
+relm4-components = "0.8.0"
+rdkafka = { version = "0.25", features = ["cmake-build"] }
+rusqlite = { version = "0.31.0", features = ["bundled"] }
+tokio   = "0.1.21"
+sourceview5 = { version = "0.8.0", features = ["gtk_v4_6"] }
+directories = "4.0.1"
+futures = { version = "0.3.25", default-features = false }
+serde = { version = "1.0.136", features = ["derive"] }
+serde_json = "1.0.79"
+tracing = "0.1.37"
+tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
+tracing-tree = "0.2.4"
+
+[build-dependencies]
+#glib-build-tools = "0.19.0"
