@@ -36,23 +36,22 @@ impl FactoryComponent for Connection {
       set_orientation: gtk::Orientation::Horizontal,
       set_spacing: 10,
       
+      #[name(connect_button)]
+      gtk::ToggleButton {
+        set_label: "Connect",
+        connect_toggled[sender] => move |btn| {
+          if btn.is_active() {
+            sender.input(ConnectionMsg::Connect);
+          } else {
+            sender.input(ConnectionMsg::Disconnect);
+          }
+        },
+      },
       #[name(label)]
       gtk::Label {
         #[watch]
         set_label: &self.name,
         set_width_chars: 3,
-      },
-      
-      #[name(connect_button)]
-      gtk::Button {
-        set_label: "Connect",
-        connect_clicked => ConnectionMsg::Connect,
-      },
-      
-      #[name(disconnect_button)]
-      gtk::Button {
-        set_label: "Disconnect",
-        connect_clicked => ConnectionMsg::Disconnect,
       },
     }
   }

@@ -111,20 +111,29 @@ impl Component for AppModel {
       set_maximized: model.state.is_maximized,
       set_default_size: (model.state.width, model.state.height),
       set_titlebar: Some(model.header.widget()),
+      #[name(main_paned)]
       gtk::Paned {
         set_orientation: gtk::Orientation::Horizontal,
+        set_resize_start_child: true,
+        set_position: ((model.state.width as f32) * 0.35).round() as i32,
         #[wrap(Some)]
         set_start_child = &gtk::ScrolledWindow {
-          set_min_content_width: 350,
-          #[wrap(Some)]
-          set_child = &gtk::Box {
-            #[local_ref] connection_listbox -> gtk::ListBox {
+          set_min_content_width: 200,
+          set_hexpand: true,
+          set_vexpand: true,
+          set_propagate_natural_width: true,
+          #[local_ref]
+          connection_listbox -> gtk::ListBox {
               set_selection_mode: gtk::SelectionMode::Single,
+              set_hexpand: true,
+              set_vexpand: true,
+              set_show_separators: true,
             },
-          }
         },
         #[wrap(Some)]
         set_end_child = &gtk::ScrolledWindow {
+          set_hexpand: true,
+          set_vexpand: true,
           #[wrap(Some)]
           set_child = &gtk::Label {
             #[watch]
@@ -226,6 +235,10 @@ impl Component for AppModel {
     if self.state.is_maximized {
       info!("should maximize");
       widgets.main_window.maximize();
-    }
+    };
+    // let position = widgets.main_window.default_size().0 / 2;
+    // info!("paned position before {}", position);
+    // widgets.main_paned.set_position(position);
+    // info!("paned position after {}", widgets.main_paned.position());
   }
 }
