@@ -1,3 +1,4 @@
+#![windows_subsystem = "windows"]
 use relm4::*;
 use tracing::*;
 use tracing_subscriber::prelude::*;
