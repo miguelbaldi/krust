@@ -2,7 +2,8 @@
 
 pub mod app;
 
-pub(self) mod alert;
 pub(self) mod application_header;
-pub(self) mod connection_list;
+pub(crate) mod connection_list;
 pub(self) mod connection_page;
+pub(self) mod topics_page;
+pub(self) mod messages_page;

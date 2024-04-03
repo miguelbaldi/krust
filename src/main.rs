@@ -1,26 +1,54 @@
-#![windows_subsystem = "windows"]
-use relm4::*;
+//#![windows_subsystem = "windows"]
+use gtk::prelude::ApplicationExt;
 use tracing::*;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 use tracing_tree::HierarchicalLayer;
 
-use krust::{AppModel, AppMode, APP_ID};
+use relm4::{
+  actions::{AccelsPlus, RelmAction, RelmActionGroup},
+  gtk, main_application, RelmApp,
+};
+
+use krust::{AppModel, APP_ID, Repository};
+
+relm4::new_action_group!(AppActionGroup, "app");
+relm4::new_stateless_action!(QuitAction, AppActionGroup, "quit");
 
 fn main() -> Result<(), ()> {
+  // Call `gtk::init` manually because we instantiate GTK types in the app model.
+  gtk::init().unwrap();
   tracing_subscriber::registry()
   .with(HierarchicalLayer::new(2))
   .with(EnvFilter::from_default_env())
   .init();
   
   info!("Running: {}", APP_ID);
-  
-  // Call `gtk::init` manually because we instantiate GTK types in the app model.
-  gtk::init().unwrap();
-  
-  let app = RelmApp::new(APP_ID);
-  app.run::<AppModel>(AppMode::View);
-  
+
+  let app = main_application();
+
+  let mut actions = RelmActionGroup::<AppActionGroup>::new();
+
+  let quit_action = {
+      let app = app.clone();
+      RelmAction::<QuitAction>::new_stateless(move |_| {
+          app.quit();
+      })
+  };
+  actions.add_action(quit_action);
+  actions.register_for_main_application();
+
+  app.set_accelerators_for_action::<QuitAction>(&["<Control>q"]);
+
+  let app = RelmApp::from_app(app);
+
+  let mut repo = Repository::new();
+  repo.init().unwrap();
+
+  //let app = RelmApp::new(APP_ID);
+  app.set_global_css(include_str!("styles.css"));
+  //app.run::<AppModel>(());
+  app.visible_on_activate(false).run::<AppModel>(());
   info!("main loop exited");
   
   Ok(())

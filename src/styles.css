@@ -1,0 +1,10 @@
+.header-title {
+  font-weight: bold;
+}
+button.connection-toggle {
+  text-decoration: underline;
+}
+button.connection-toggle:checked {
+  background:  	#b7f39b;
+  text-decoration: underline;
+}

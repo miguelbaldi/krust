@@ -1,6 +1,4 @@
-use gtk::prelude::{
-  ButtonExt, ToggleButtonExt, WidgetExt,
-};
+use gtk::prelude::*;
 use relm4::*;
 
 #[derive(Debug)]
@@ -8,9 +6,6 @@ pub struct HeaderModel;
 
 #[derive(Debug)]
 pub enum HeaderOutput {
-  View,
-  Edit,
-  Export,
   AddConnection,
 }
 
@@ -25,43 +20,19 @@ impl SimpleComponent for HeaderModel {
       #[root]
       gtk::HeaderBar {
           #[wrap(Some)]
-          set_title_widget = &gtk::Box {
-              add_css_class: "linked",
-              #[name = "group"]
-              gtk::ToggleButton {
-                  set_label: "View",
-                  set_active: true,
-                  connect_toggled[sender] => move |btn| {
-                      if btn.is_active() {
-                          sender.output(HeaderOutput::View).unwrap()
-                      }
-                  },
+          set_title_widget = &gtk::Label {
+              add_css_class: "title",
+              add_css_class: "header-title",
+              set_label: "KRust Kafka Client",
+          },
+          pack_end = &gtk::Box {
+            gtk::Button {
+              set_label: "Add connection",
+              connect_clicked[sender] => move |_btn| {
+                sender.output(HeaderOutput::AddConnection).unwrap()
               },
-              gtk::ToggleButton {
-                  set_label: "Edit",
-                  set_group: Some(&group),
-                  connect_toggled[sender] => move |btn| {
-                      if btn.is_active() {
-                          sender.output(HeaderOutput::Edit).unwrap()
-                      }
-                  },
-              },
-              gtk::ToggleButton {
-                  set_label: "Export",
-                  set_group: Some(&group),
-                  connect_toggled[sender] => move |btn| {
-                      if btn.is_active() {
-                          sender.output(HeaderOutput::Export).unwrap()
-                      }
-                  },
-              },
-              gtk::Button {
-                set_label: "Add connection",
-                connect_clicked[sender] => move |_btn| {
-                  sender.output(HeaderOutput::AddConnection).unwrap()
-                },
-              },
-          }
+            },
+        },
       }
   }
 

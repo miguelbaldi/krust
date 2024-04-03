@@ -9,7 +9,13 @@
 
 mod component;
 mod config;
+mod modals;
+mod backend;
 
-pub use component::app::{AppModel, AppMode};
+pub use component::app::AppModel;
+pub use component::app::AppMsg;
+pub use backend::repository::Repository;
 
 pub const APP_ID: &str = "io.miguelbaldi.KRust";
+pub const APP_NAME: &str = "KRust Kafka Client";
+pub const VERSION: &str = "0.0.1";
