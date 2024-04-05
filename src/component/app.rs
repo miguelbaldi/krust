@@ -6,11 +6,11 @@ use tracing::{error, info, warn};
 
 use crate::{
   backend::repository::{KrustConnection, KrustMessage, Repository}, component::{
-    application_header::HeaderOutput, connection_list::KrustConnectionOutput, connection_page::{ConnectionPageModel, ConnectionPageMsg, ConnectionPageOutput}, messages_page::{MessagesPageModel, MessagesPageOutput}, topics_page::{TopicsPageModel, TopicsPageMsg, TopicsPageOutput}
+    connection_list::KrustConnectionOutput, connection_page::{ConnectionPageModel, ConnectionPageMsg, ConnectionPageOutput}, messages_page::MessagesPageModel, status_bar::{StatusBarModel, STATUS_BROKER}, topics_page::{TopicsPageModel, TopicsPageMsg, TopicsPageOutput}
   }, config::State, modals::about::AboutDialog
 };
 
-use super::{application_header::HeaderModel, connection_list::ConnectionListModel, messages_page::MessagesPageMsg};
+use super::{connection_list::ConnectionListModel, messages_page::MessagesPageMsg};
 
 #[derive(Debug)]
 struct DialogModel {
@@ -90,6 +90,7 @@ pub enum AppMsg {
   SaveConnection(Option<DynamicIndex>, KrustConnection),
   ShowEditConnectionPage(DynamicIndex, KrustConnection),
   ShowTopicsPage(KrustConnection),
+  ShowTopicsPageByIndex(i32),
   ShowMessagesPage(Vec<KrustMessage>),
   RemoveConnection(DynamicIndex),
 }
@@ -97,7 +98,7 @@ pub enum AppMsg {
 #[derive(Debug)]
 pub struct AppModel {
   state: State,
-  _header: Controller<HeaderModel>,
+  _status_bar: Controller<StatusBarModel>,
   dialog: Controller<DialogModel>,
   _about_dialog: Controller<AboutDialog>,
   connections: FactoryVecDeque<ConnectionListModel>,
@@ -134,7 +135,6 @@ impl Component for AppModel {
       set_visible: true,
       set_maximized: state.is_maximized,
       set_default_size: (state.width, state.height),
-      //set_titlebar: Some(header.widget()),
       set_title: Some("KRust Kafka Client"),
       gtk::Box {
         set_orientation: gtk::Orientation::Vertical,
@@ -163,6 +163,10 @@ impl Component for AppModel {
               set_vexpand: true,
               set_show_separators: true,
               add_css_class: "rich-list",
+              connect_row_activated[sender] => move |list_box, row| {
+                info!("clicked on connection: {:?} - {:?}", list_box, row.index());
+                sender.input(AppMsg::ShowTopicsPageByIndex(row.index()));
+              },
             },
           },
           #[wrap(Some)]
@@ -189,13 +193,17 @@ impl Component for AppModel {
                 add_child = topics_page.widget() -> &gtk::Box {} -> {
                   set_name: "Topics"
                 },
-                add_child = messages_page.widget() -> &gtk::Box {} -> {
+                add_child = messages_page.widget() -> &gtk::Paned {} -> {
                   set_name: "Messages"
                 },
               }
             }
           },
         },
+        gtk::Box {
+          add_css_class: "status-bar",
+          status_bar.widget() -> &gtk::CenterBox {}
+        }
       },
       
       connect_close_request[sender, main_paned] => move |this| {
@@ -233,12 +241,10 @@ impl Component for AppModel {
     .launch(())
     .detach();
     
-    let header: Controller<HeaderModel> =
-    HeaderModel::builder()
-    .launch(())
-    .forward(sender.input_sender(), |msg| match msg {
-      HeaderOutput::AddConnection => AppMsg::ShowConnection,
-    });
+    let status_bar: Controller<StatusBarModel> =
+    StatusBarModel::builder()
+    .launch_with_broker((), &STATUS_BROKER)
+    .detach();
     
     let dialog = DialogModel::builder()
     .transient_for(&root)
@@ -309,7 +315,7 @@ impl Component for AppModel {
     
     let model = AppModel {
       state,
-      _header: header,
+      _status_bar: status_bar,
       dialog,
       _about_dialog: about_dialog,
       connections,
@@ -335,8 +341,8 @@ impl Component for AppModel {
         relm4::main_application().quit();
       }
       AppMsg::ShowConnection => {
-        info!("|-->Showing connection ");
-        
+        info!("|-->Showing new connection page");
+        self.connection_page.emit(ConnectionPageMsg::New);
         self.connection_page.widget().set_visible(true);
         self.main_stack.set_visible_child_name("Connection");
       }
@@ -380,6 +386,18 @@ impl Component for AppModel {
         info!("|-->Show edit connection page for {:?}", conn);
         self.topics_page.emit(TopicsPageMsg::List(conn));
         self.main_stack.set_visible_child_name("Topics");
+        
+      }
+      AppMsg::ShowTopicsPageByIndex(idx) => {
+        let is_connected = self.connections.guard().get(idx as usize).unwrap().is_connected;
+        if is_connected {
+          let conn: KrustConnection = self.connections.guard().get_mut(idx as usize).unwrap().into();
+          info!("|-->Show edit connection page for index {:?} - {:?}", idx, conn);
+          self.topics_page.emit(TopicsPageMsg::List(conn));
+          self.main_stack.set_visible_child_name("Topics");
+        } else {
+          self.main_stack.set_visible_child_name("Home");
+        }
         
       }
       AppMsg::RemoveConnection(index) => {

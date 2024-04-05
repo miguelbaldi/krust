@@ -7,7 +7,6 @@ use rdkafka::message::Headers;
 use rdkafka::topic_partition_list::TopicPartitionList;
 use rdkafka::Message;
 use std::fmt::{self, Display};
-use std::io::Read;
 use std::time::Duration;
 use tracing::{info, trace, warn};
 
@@ -81,7 +80,7 @@ impl KafkaBackend {
     .create_with_context::<C, T>(context)
   }
   
-  pub fn list_topics(&self) -> Vec<Topic> {
+  pub async fn list_topics(&self) -> Vec<Topic> {
     let consumer: BaseConsumer = ClientConfig::new()
     .set("bootstrap.servers", self.config.brokers_list.as_str())
     .create()

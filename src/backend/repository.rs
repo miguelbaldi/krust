@@ -34,9 +34,9 @@ pub struct Repository{
 }
 
 impl Repository {
-  pub fn new() -> Repository {
+  pub fn new() -> Self {
     let conn = database_connection().unwrap();
-    Repository { conn }
+    Self { conn }
   }
 
   pub fn init(&mut self) -> Result<(), ExternalError> {

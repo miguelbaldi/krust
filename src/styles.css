@@ -8,3 +8,6 @@ button.connection-toggle:checked {
   background:  	#b7f39b;
   text-decoration: underline;
 }
+.status-bar {
+  background: #FDEBD8;
+}

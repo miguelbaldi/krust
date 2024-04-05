@@ -39,3 +39,6 @@ Cargo.lock
 
 # End of https://www.toptal.com/developers/gitignore/api/visualstudiocode,rust
 
+icon.png
+krust-setup.exe
+libs/

@@ -5,13 +5,16 @@ use relm4::{
 };
 use tracing::info;
 
-use crate::backend::{kafka::{KafkaBackend, Topic}, repository::{KrustConnection, KrustMessage}};
+use crate::{backend::{
+  kafka::{KafkaBackend, Topic},
+  repository::{KrustConnection, KrustMessage},
+}, component::status_bar::{StatusBarMsg, STATUS_BROKER}};
 
 // Table: start
-#[derive(Debug, PartialEq, Eq)]
-struct TopicListItem {
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TopicListItem {
   name: String,
-  partition_count: usize, 
+  partition_count: usize,
 }
 
 impl TopicListItem {
@@ -68,7 +71,8 @@ impl LabelColumn for NameColumn {
 #[derive(Debug)]
 pub struct TopicsPageModel {
   pub current: Option<KrustConnection>,
-  topics_wrapper: TypedColumnView<TopicListItem, gtk::SingleSelection>,
+  pub topics_wrapper: TypedColumnView<TopicListItem, gtk::SingleSelection>,
+  pub is_loading: bool,
 }
 
 #[derive(Debug)]
@@ -84,7 +88,8 @@ pub enum TopicsPageOutput {
 
 #[derive(Debug)]
 pub enum CommandMsg {
-    Data(Vec<KrustMessage>),
+  Data(Vec<KrustMessage>),
+  ListFinished(Vec<Topic>),
 }
 
 #[relm4::component(pub)]
@@ -126,6 +131,7 @@ impl Component for TopicsPageModel {
     let model = TopicsPageModel {
       current: current,
       topics_wrapper: view_wrapper,
+      is_loading: false,
     };
     
     let topics_view = &model.topics_wrapper.view;
@@ -149,45 +155,59 @@ impl Component for TopicsPageModel {
     
     match msg {
       TopicsPageMsg::List(conn) => {
+        STATUS_BROKER.send(StatusBarMsg::Start);
         self.current = Some(conn.clone());
-        let kafka = KafkaBackend::new(conn);
-        let topics = kafka.list_topics();
-        for topic in topics {
-          self.topics_wrapper.append(TopicListItem::new(topic));
-        }
+        sender.oneshot_command(async {
+          let kafka = KafkaBackend::new(conn);
+          let topics = kafka.list_topics().await;
+          
+          CommandMsg::ListFinished(topics)
+        });
       }
       TopicsPageMsg::OpenTopic(idx) => {
+        STATUS_BROKER.send(StatusBarMsg::Start);
         let item = self.topics_wrapper.get_visible(idx).unwrap();
         let topic_name = item.borrow().name.clone();
         let conn = self.current.clone().unwrap();
         sender.oneshot_command(async {
           let kafka = KafkaBackend::new(conn);
           let message_count = kafka.topic_message_count(topic_name.clone());
-          info!("selected topic {} with {} messages", topic_name.clone(), message_count);
+          info!(
+            "selected topic {} with {} messages",
+            topic_name.clone(),
+            message_count
+          );
           // Run async background task
           let messages = kafka.list_messages_for_topic(topic_name).await;
-          for message in messages.clone() {
-            info!("MESSAGE::{:?}", message);
-          }
+          info!("MESSAGES COUNT::{:?}", messages.len());
           CommandMsg::Data(messages)
         });
-        
       }
     };
     
     self.update_view(widgets, sender);
   }
-
+  
   fn update_cmd(
     &mut self,
     message: Self::CommandOutput,
     sender: ComponentSender<Self>,
     _: &Self::Root,
-) {
+  ) {
     match message {
-        CommandMsg::Data(data) => {
-          sender.output(TopicsPageOutput::OpenMessagesPage(data)).unwrap();
-        }
+      CommandMsg::Data(data) => {
+        sender
+        .output(TopicsPageOutput::OpenMessagesPage(data))
+        .unwrap();
+      }
+      CommandMsg::ListFinished(topics) => {
+        self.topics_wrapper.clear();
+        for topic in topics.into_iter().filter(|t| !t.name.starts_with("__")) {
+          self.topics_wrapper
+          .insert_sorted(TopicListItem::new(topic), |a, b| a.cmp(b));
+        };
+        STATUS_BROKER.send(StatusBarMsg::StopWithInfo { text: Some("Topics loaded!".into()) });
+      }
     }
-}
+  }
 }

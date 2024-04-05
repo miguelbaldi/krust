@@ -1,0 +1,8 @@
+version: "3"
+services:
+  gtk4-rs:
+    image: ghcr.io/miguelbaldi/relm4-docker:latest-appimage
+    volumes:
+      - .:/mnt:z
+    command: sh -c "cargo  appimage"
+

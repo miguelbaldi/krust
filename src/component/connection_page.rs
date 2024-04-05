@@ -15,6 +15,7 @@ pub struct ConnectionPageModel {
 
 #[derive(Debug)]
 pub enum ConnectionPageMsg {
+  New,
   Save,
   Edit(DynamicIndex, KrustConnection),
 }
@@ -97,6 +98,14 @@ impl Component for ConnectionPageModel {
     info!("received message: {:?}", msg);
     
     match msg {
+      ConnectionPageMsg::New => {
+        widgets.name_entry.set_text("");
+        widgets.brokers_entry.set_text("");
+        self.name = String::default();
+        self.brokers_list = String::default();
+        self.current = None;
+        self.current_index = None;
+      }
       ConnectionPageMsg::Save => {
         let name = widgets.name_entry.text().to_string();
         let brokers_list = widgets.brokers_entry.text().to_string();

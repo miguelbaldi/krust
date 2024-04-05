@@ -31,6 +31,7 @@ pub struct ConnectionListModel {
   pub security_type: Option<String>,
   pub sasl_mechanism: Option<String>,
   pub jaas_config: Option<String>,
+  pub is_connected: bool,
 }
 
 impl From<&mut ConnectionListModel> for KrustConnection {
@@ -94,6 +95,7 @@ impl FactoryComponent for ConnectionListModel {
       security_type: conn.security_type,
       sasl_mechanism: conn.sasl_mechanism,
       jaas_config: conn.jaas_config,
+      is_connected: false,
     }
   }
   
@@ -101,18 +103,7 @@ impl FactoryComponent for ConnectionListModel {
     match msg {
       KrustConnectionMsg::Connect => {
         info!("Connect request for {}", self.name);
-        // let kafka = KafkaBackend::new(KrustConnection {
-        //   id: self.id,
-        //   name: self.name.clone(),
-        //   brokers_list: self.brokers_list.clone(),
-        //   security_type: self.security_type.clone(),
-        //   sasl_mechanism: self.sasl_mechanism.clone(),
-        //   jaas_config: self.jaas_config.clone(),
-        // });
-        // let topics = kafka.list_topics();
-        // for topic in topics {
-        //   debug!("TOPIC::{} ({})", topic.name, topic.partitions.len());
-        // }
+        self.is_connected = true;
         let conn: KrustConnection = self.into();
         sender
         .output(KrustConnectionOutput::ShowTopics(conn))
@@ -120,6 +111,7 @@ impl FactoryComponent for ConnectionListModel {
       }
       KrustConnectionMsg::Disconnect => {
         info!("Disconnect request for {}", self.name);
+        self.is_connected = false;
       }
       KrustConnectionMsg::Edit(index) => {
         info!("Edit request for {}", self.name);
