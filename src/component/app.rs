@@ -6,11 +6,11 @@ use tracing::{error, info, warn};
 
 use crate::{
   backend::repository::{KrustConnection, KrustMessage, Repository}, component::{
-    connection_list::KrustConnectionOutput, connection_page::{ConnectionPageModel, ConnectionPageMsg, ConnectionPageOutput}, messages_page::MessagesPageModel, status_bar::{StatusBarModel, STATUS_BROKER}, topics_page::{TopicsPageModel, TopicsPageMsg, TopicsPageOutput}
+    connection_list::KrustConnectionOutput, connection_page::{ConnectionPageModel, ConnectionPageMsg, ConnectionPageOutput}, status_bar::{StatusBarModel, STATUS_BROKER}, topics_page::{TopicsPageModel, TopicsPageMsg, TopicsPageOutput}
   }, config::State, modals::about::AboutDialog
 };
 
-use super::{connection_list::ConnectionListModel, messages_page::MessagesPageMsg};
+use super::{connection_list::ConnectionListModel, messages::messages_page::{MessagesPageModel, MessagesPageMsg}};
 
 #[derive(Debug)]
 struct DialogModel {

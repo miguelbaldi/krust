@@ -3,7 +3,7 @@ use relm4::{
   typed_view::column::{LabelColumn, TypedColumnView},
   *,
 };
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::{backend::{
   kafka::{KafkaBackend, Topic},
@@ -73,12 +73,14 @@ pub struct TopicsPageModel {
   pub current: Option<KrustConnection>,
   pub topics_wrapper: TypedColumnView<TopicListItem, gtk::SingleSelection>,
   pub is_loading: bool,
+  pub search_text: String,
 }
 
 #[derive(Debug)]
 pub enum TopicsPageMsg {
   List(KrustConnection),
   OpenTopic(u32),
+  Search(String),
 }
 
 #[derive(Debug)]
@@ -102,8 +104,23 @@ impl Component for TopicsPageModel {
   view! {
     #[root]
     gtk::Box {
+      set_orientation: gtk::Orientation::Vertical,
       set_hexpand: true,
       set_vexpand: true,
+      gtk::CenterBox {
+        set_orientation: gtk::Orientation::Horizontal,
+        set_margin_all: 10,
+        set_hexpand: true,
+        #[wrap(Some)]
+        set_start_widget = &gtk::Box {
+          #[name(topics_search_entry)]
+          gtk::SearchEntry {
+            connect_search_changed[sender] => move |entry| {
+              sender.clone().input(TopicsPageMsg::Search(entry.text().to_string()));
+            }
+          },
+        },
+      },
       gtk::ScrolledWindow {
         set_vexpand: true,
         set_hexpand: true,
@@ -132,11 +149,12 @@ impl Component for TopicsPageModel {
       current: current,
       topics_wrapper: view_wrapper,
       is_loading: false,
+      search_text: String::default(),
     };
-    
+
     let topics_view = &model.topics_wrapper.view;
+    let snd = sender.clone();
     topics_view.connect_activate(move |_view, idx| {
-      let snd = sender.clone();
       snd.input(TopicsPageMsg::OpenTopic(idx));
     });
     
@@ -154,6 +172,14 @@ impl Component for TopicsPageModel {
     info!("received message: {:?}", msg);
     
     match msg {
+      TopicsPageMsg::Search(term) => {
+        self.topics_wrapper.clear_filters();
+        let search_term = term.clone();
+        self.topics_wrapper.add_filter(move |item| {
+          debug!("Searching topics {}", search_term);
+          item.name.contains(search_term.as_str())
+        });
+      }
       TopicsPageMsg::List(conn) => {
         STATUS_BROKER.send(StatusBarMsg::Start);
         self.current = Some(conn.clone());
@@ -211,3 +237,4 @@ impl Component for TopicsPageModel {
     }
   }
 }
+

@@ -1,161 +1,13 @@
 use gtk::prelude::*;
 use relm4::{
-  typed_view::{column::{LabelColumn, RelmColumn, TypedColumnView}, OrdFn},
+  typed_view::column::TypedColumnView,
   *,
 };
 use sourceview::prelude::*;
 use sourceview5 as sourceview;
 use tracing::info;
 
-use crate::{backend::repository::{KrustConnection, KrustHeader, KrustMessage}, component::status_bar::{StatusBarMsg, STATUS_BROKER}};
-
-// Table headers: start
-#[derive(Debug, PartialEq, Eq)]
-struct HeaderListItem {
-  name: String,
-  value: Option<String>,
-}
-
-impl HeaderListItem {
-  fn new(value: KrustHeader) -> Self {
-    Self {
-      name: value.key,
-      value: value.value,
-    }
-  }
-}
-
-struct HeaderNameColumn;
-
-impl LabelColumn for HeaderNameColumn {
-  type Item = HeaderListItem;
-  type Value = String;
-  
-  const COLUMN_NAME: &'static str = "Name";
-  
-  const ENABLE_SORT: bool = true;
-  const ENABLE_RESIZE: bool = true;
-  
-  fn get_cell_value(item: &Self::Item) -> Self::Value {
-    item.name.clone()
-  }
-  
-  fn format_cell_value(value: &Self::Value) -> String {
-    format!("{}", value)
-  }
-}
-struct HeaderValueColumn;
-
-impl HeaderValueColumn {
-  fn format_cell_value(value: &String) -> String {
-    format!("{}", value)
-  }
-  fn get_cell_value(item: &HeaderListItem) -> String {
-    item.value.clone().unwrap_or_default()
-  }
-}
-
-impl RelmColumn for HeaderValueColumn {
-  type Root = gtk::Label;
-  type Widgets = ();
-  type Item = HeaderListItem;
-  
-  const COLUMN_NAME: &'static str = "Value";
-  const ENABLE_RESIZE: bool = true;
-  const ENABLE_EXPAND: bool = true;
-  
-  fn setup(_item: &gtk::ListItem) -> (Self::Root, Self::Widgets) {
-    (gtk::Label::new(None), ())
-  }
-  
-  fn bind(item: &mut Self::Item, _: &mut Self::Widgets, label: &mut Self::Root) {
-    label.set_label(&HeaderValueColumn::format_cell_value(&HeaderValueColumn::get_cell_value(item)));
-    label.set_halign(gtk::Align::Start);
-  }
-  
-  fn sort_fn() -> OrdFn<Self::Item> {
-    Some(Box::new(|a: &HeaderListItem, b: &HeaderListItem| a.value.cmp(&b.value)))
-  }
-}
-// Table headers: end
-
-// Table messages: start
-#[derive(Debug)]
-struct MessageListItem {
-  offset: i64,
-  key: String,
-  value: String,
-  timestamp: Option<i64>,
-  headers: Vec<KrustHeader>,
-}
-
-impl PartialEq for MessageListItem {
-  fn eq(&self, other: &Self) -> bool {
-    self.offset == other.offset
-    && self.key == other.key
-    && self.value == other.value
-    && self.timestamp == other.timestamp
-  }
-}
-impl Eq for MessageListItem {}
-
-impl MessageListItem {
-  fn new(value: KrustMessage) -> Self {
-    Self {
-      offset: value.offset,
-      key: "".to_string(),
-      value: value.value,
-      timestamp: value.timestamp,
-      headers: value.headers,
-    }
-  }
-}
-
-struct OfssetColumn;
-
-impl LabelColumn for OfssetColumn {
-  type Item = MessageListItem;
-  type Value = i64;
-  
-  const COLUMN_NAME: &'static str = "Offset";
-  
-  const ENABLE_SORT: bool = true;
-  const ENABLE_RESIZE: bool = true;
-  
-  fn get_cell_value(item: &Self::Item) -> Self::Value {
-    item.offset
-  }
-  
-  fn format_cell_value(value: &Self::Value) -> String {
-    format!("{}", value)
-  }
-}
-
-struct ValueColumn;
-
-impl LabelColumn for ValueColumn {
-  type Item = MessageListItem;
-  type Value = String;
-  
-  const COLUMN_NAME: &'static str = "Value";
-  const ENABLE_RESIZE: bool = true;
-  const ENABLE_EXPAND: bool = true;
-  const ENABLE_SORT: bool = true;
-  
-  fn get_cell_value(item: &Self::Item) -> Self::Value {
-    item.value.clone()
-  }
-  
-  fn format_cell_value(value: &Self::Value) -> String {
-    if value.len() >= 200 {
-      format!("{}...", value.replace("\n", " ").get(0..200).unwrap_or("").to_string())
-    } else {
-      format!("{}...", value)
-    }
-  }
-}
-
-// Table messages: end
+use crate::{backend::repository::{KrustConnection, KrustMessage}, component::{messages::lists::{HeaderListItem, HeaderNameColumn, HeaderValueColumn, MessageListItem, MessageOfssetColumn, MessagePartitionColumn, MessageTimestampColumn, MessageValueColumn}, status_bar::{StatusBarMsg, STATUS_BROKER}}};
 
 #[derive(Debug)]
 pub struct MessagesPageModel {
@@ -190,8 +42,39 @@ impl Component for MessagesPageModel {
       //set_resize_start_child: true,
       #[wrap(Some)]
       set_start_child = &gtk::Box {
+        set_orientation: gtk::Orientation::Vertical,
         set_hexpand: true,
         set_vexpand: true,
+        gtk::CenterBox {
+          set_orientation: gtk::Orientation::Horizontal,
+          set_halign: gtk::Align::Fill,
+          set_margin_all: 10,
+          set_hexpand: true,
+          #[wrap(Some)]
+          set_start_widget = &gtk::Box {
+            set_orientation: gtk::Orientation::Horizontal,
+            set_halign: gtk::Align::Start,
+            set_hexpand: true,
+            gtk::Button { set_icon_name: "media-playback-start-symbolic", },
+            gtk::Button { set_icon_name: "media-playback-stop-symbolic", set_margin_start: 5, },
+          },
+          #[wrap(Some)]
+          set_end_widget = &gtk::Box {
+            set_orientation: gtk::Orientation::Horizontal,
+            set_halign: gtk::Align::Fill,
+            set_hexpand: true,
+            #[name(topics_search_entry)]
+            gtk::SearchEntry {
+              set_hexpand: true,
+              set_halign: gtk::Align::Fill,
+              
+            },
+            gtk::Button {
+              set_icon_name: "edit-find-symbolic",
+              set_margin_start: 5,
+            },
+          },
+        },
         gtk::ScrolledWindow {
           set_vexpand: true,
           set_hexpand: true,
@@ -269,8 +152,10 @@ impl Component for MessagesPageModel {
   ) -> ComponentParts<Self> {
     // Initialize the messages ListView wrapper
     let mut messages_wrapper = TypedColumnView::<MessageListItem, gtk::SingleSelection>::new();
-    messages_wrapper.append_column::<OfssetColumn>();
-    messages_wrapper.append_column::<ValueColumn>();
+    messages_wrapper.append_column::<MessagePartitionColumn>();
+    messages_wrapper.append_column::<MessageOfssetColumn>();
+    messages_wrapper.append_column::<MessageValueColumn>();
+    messages_wrapper.append_column::<MessageTimestampColumn>();
     // Initialize the headers ListView wrapper
     let mut headers_wrapper = TypedColumnView::<HeaderListItem, gtk::NoSelection>::new();
     headers_wrapper.append_column::<HeaderNameColumn>();
@@ -336,14 +221,16 @@ impl Component for MessagesPageModel {
         .downcast::<sourceview::Buffer>()
         .expect("sourceview was not backed by sourceview buffer");
         
-        let valid_json: Result<serde::de::IgnoredAny, _> = serde_json::from_str(message_text.as_str());
-        let language = match valid_json {
-          Ok(_) => sourceview::LanguageManager::default().language("json"),
-          Err(_) => sourceview::LanguageManager::default().language("text"),
+        let valid_json: Result<serde_json::Value, _> = serde_json::from_str(message_text.as_str());
+        let (language, formatted_text) = match valid_json {
+          Ok(jt) => {
+            (sourceview::LanguageManager::default().language("json"), serde_json::to_string_pretty(&jt).unwrap())
+          },
+          Err(_) => (sourceview::LanguageManager::default().language("text"), message_text),
         };
         buffer.set_language(language.as_ref());
         buffer
-        .set_text(message_text.as_str());
+        .set_text(formatted_text.as_str());
         
         self.headers_wrapper.clear();
         for header in item.borrow().headers.iter() {

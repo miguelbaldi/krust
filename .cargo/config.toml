@@ -1,0 +1,2 @@
+[env]
+CHRONO_TZ_TIMEZONE_FILTER = "(GMT|UTC|Brazil/.*)"
