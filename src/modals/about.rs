@@ -3,7 +3,6 @@ use relm4::{adw, gtk, ComponentParts, ComponentSender, SimpleComponent};
 
 use crate::{APP_NAME, VERSION};
 
-
 #[derive(Debug)]
 pub struct AboutDialog {}
 

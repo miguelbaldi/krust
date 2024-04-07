@@ -1,11 +1,24 @@
 #!/bin/bash
 set -euo pipefail
 
-dnf -y install mingw64-gcc-c++ zstd
+dnf -y install mingw64-openssl-static mingw64-gcc-c++ zstd cyrus-sasl-devel perl
 curl --connect-timeout 60 -m 60 -L -o /tmp/gtksourceview-5.pkg.tar.zst https://mirror.msys2.org/mingw/mingw64/mingw-w64-x86_64-gtksourceview5-5.12.0-1-any.pkg.tar.zst
+curl --connect-timeout 60 -m 60 -L -o /tmp/cyrus-sasl-2.pkg.tar.zst https://mirror.msys2.org/mingw/mingw64/mingw-w64-x86_64-cyrus-sasl-2.1.28-3-any.pkg.tar.zst
 cd /tmp
 tar --use-compress-program=unzstd -xvf gtksourceview-5.pkg.tar.zst
+tar --use-compress-program=unzstd -xvf cyrus-sasl-2.pkg.tar.zst
 
+# libsasl-2
+cp -fvr /tmp/mingw64/sbin/saslpasswd2.exe /usr/x86_64-w64-mingw32/sys-root/mingw/sbin/saslpasswd2.exe
+cp -fvr /tmp/mingw64/sbin/sasldblistusers2.exe /usr/x86_64-w64-mingw32/sys-root/mingw/sbin/sasldblistusers2.exe
+cp -fvr /tmp/mingw64/sbin/pluginviewer.exe /usr/x86_64-w64-mingw32/sys-root/mingw/sbin/pluginviewer.exe
+cp -fvr /tmp/mingw64/bin/libsasl2-3.dll /usr/x86_64-w64-mingw32/sys-root/mingw/bin/libsasl2-3.dll
+cp -fvr /tmp/mingw64/include/sasl/ /usr/x86_64-w64-mingw32/sys-root/mingw/include/
+cp -fvr /tmp/mingw64/lib/libsasl2.dll.a /usr/x86_64-w64-mingw32/sys-root/mingw/lib/
+cp -fvr /tmp/mingw64/lib/pkgconfig/libsasl2.pc /usr/x86_64-w64-mingw32/sys-root/mingw/lib/pkgconfig/
+cp -fvr /tmp/mingw64/lib/sasl2/ /usr/x86_64-w64-mingw32/sys-root/mingw/lib/
+
+# GtkSourceview-5
 cp -fvr /tmp/mingw64/bin/libgtksourceview-5-0.dll /usr/x86_64-w64-mingw32/sys-root/mingw/bin/libgtksourceview-5-0.dll
 cp -fvr /tmp/mingw64/include/gtksourceview-5/ /usr/x86_64-w64-mingw32/sys-root/mingw/include/
 cp -fvr /tmp/mingw64/share/gtksourceview-5/ /usr/x86_64-w64-mingw32/sys-root/mingw/share/
