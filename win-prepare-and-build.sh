@@ -36,4 +36,4 @@ cp -rfv /tmp/mingw64/share/gtksourceview-5 package/share/
 cp -rfv /tmp/mingw64/lib/girepository-1.0/ package/lib/
 cp -rfv /tmp/mingw64/share/gir-1.0/ package/share/
 export CHRONO_TZ_TIMEZONE_FILTER="(GMT|UTC|Brazil/.*)"
-build --release && package
+build && package
