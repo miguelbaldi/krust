@@ -38,7 +38,9 @@ openssl-src = { version = "300", default-features = false, features = ["force-en
 [package.metadata.appimage]
 auto_link = true
 auto_link_exclude_list = [
-    #"libc.so*",
+    "libc.so*",
     "libdl.so*",
     "libpthread.so*",
+    "libstdc++.so*",
+    "libm.so*",
 ]
