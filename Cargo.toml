@@ -13,7 +13,6 @@ adw = { version = "0.6.0", package = "libadwaita", features = ["v1_2"] }
 relm4 = { version = "0.8.0", features = ["libadwaita"] }
 relm4-components = "0.8.0"
 rusqlite = { version = "0.31.0", features = ["bundled"] }
-tokio   = "0.1.21"
 sourceview5 = { version = "0.8.0", features = ["v5_4"] }
 directories = "4.0.1"
 futures = { version = "0.3.25", default-features = false }
