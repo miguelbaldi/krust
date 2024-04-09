@@ -10,15 +10,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: Build
       run: docker-compose up
     - name: Upload Artifact
-      uses: actions/upload-artifact@v2.3.1
+      uses: actions/upload-artifact@v3
       with:
         name: executables
+        if-no-files-found: error
         path: |
-          *.AppImage
+          target/appimage/*.AppImage
   build-windows:
     runs-on: ubuntu-latest
     steps:
@@ -30,7 +31,7 @@ jobs:
     - name: Zip Portable Windows Artifact
       run: zip -r windows-portable.zip package
     - name: Upload Artifact
-      uses: actions/upload-artifact@v2.3.1
+      uses: actions/upload-artifact@v3
       with:
         name: executables
         path: |

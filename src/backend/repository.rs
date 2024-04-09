@@ -6,6 +6,7 @@ use strum::EnumString;
 
 use crate::config::{database_connection, ExternalError};
 
+#[allow(non_camel_case_types)]
 #[derive(Debug, Clone, PartialEq, Default, EnumString, strum::Display)]
 pub enum KrustConnectionSecurityType {
     #[default]
