@@ -51,7 +51,7 @@ pub struct Repository {
 
 impl Repository {
     pub fn new() -> Self {
-        let conn = database_connection().unwrap();
+        let conn = database_connection().expect("problem acquiring database connection");
         Self { conn }
     }
 

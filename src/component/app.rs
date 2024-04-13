@@ -1,6 +1,6 @@
 //! Application entrypoint.
 
-use gtk::prelude::*;
+use gtk::{gio, glib, prelude::*};
 use relm4::{
     actions::{RelmAction, RelmActionGroup},
     factory::FactoryVecDeque,
@@ -30,76 +30,8 @@ use super::{
 };
 
 #[derive(Debug)]
-struct DialogModel {
-    hidden: bool,
-}
-
-#[derive(Debug)]
-enum DialogInput {
-    Show,
-    Accept,
-    Cancel,
-}
-
-#[derive(Debug)]
-enum DialogOutput {
-    Close,
-}
-
-#[relm4::component]
-impl SimpleComponent for DialogModel {
-    type Init = bool;
-    type Input = DialogInput;
-    type Output = DialogOutput;
-
-    view! {
-      #[name(message_dialog)]
-      gtk::MessageDialog {
-        set_modal: true,
-        set_default_height: 160,
-        #[watch]
-        set_visible: !model.hidden,
-        set_text: Some("Do you want to close before saving?"),
-        set_secondary_text: Some("All unsaved changes will be lost"),
-        add_button: ("Close", gtk::ResponseType::Accept),
-        add_button: ("Cancel", gtk::ResponseType::Cancel),
-        connect_response[sender] => move |_, resp| {
-          sender.input(if resp == gtk::ResponseType::Accept {
-            DialogInput::Accept
-          } else {
-            DialogInput::Cancel
-          })
-        }
-      }
-    }
-
-    fn init(
-        params: Self::Init,
-        root: Self::Root,
-        sender: ComponentSender<Self>,
-    ) -> ComponentParts<Self> {
-        let model = DialogModel { hidden: params };
-        let widgets = view_output!();
-        ComponentParts { model, widgets }
-    }
-
-    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
-        match msg {
-            DialogInput::Show => {
-                self.hidden = false;
-            }
-            DialogInput::Accept => {
-                self.hidden = true;
-                sender.output(DialogOutput::Close).unwrap()
-            }
-            DialogInput::Cancel => self.hidden = true,
-        }
-    }
-}
-
-#[derive(Debug)]
 pub enum AppMsg {
-    CloseRequest(State),
+    CloseRequest,
     Close,
     AddConnection(KrustConnection),
     ShowConnection,
@@ -113,12 +45,12 @@ pub enum AppMsg {
 
 #[derive(Debug)]
 pub struct AppModel {
-    state: State,
+    //state: State,
     _status_bar: Controller<StatusBarModel>,
-    dialog: Controller<DialogModel>,
+    //dialog: Controller<DialogModel>,
     _about_dialog: Controller<AboutDialog>,
     connections: FactoryVecDeque<ConnectionListModel>,
-    main_stack: gtk::Stack,
+    //main_stack: gtk::Stack,
     connection_page: Controller<ConnectionPageModel>,
     topics_page: Controller<TopicsPageModel>,
     messages_page: Controller<MessagesPageModel>,
@@ -149,8 +81,6 @@ impl Component for AppModel {
     view! {
       main_window = adw::ApplicationWindow::new(&main_application()) {
         set_visible: true,
-        set_maximized: state.is_maximized,
-        set_default_size: (state.width, state.height),
         set_title: Some("KRust Kafka Client"),
         gtk::Box {
           set_orientation: gtk::Orientation::Vertical,
@@ -165,7 +95,6 @@ impl Component for AppModel {
           gtk::Paned {
             set_orientation: gtk::Orientation::Horizontal,
             set_resize_start_child: true,
-            set_position: state.separator_position,
             #[wrap(Some)]
             set_start_child = &gtk::ScrolledWindow {
               set_min_content_width: 200,
@@ -222,18 +151,8 @@ impl Component for AppModel {
           }
         },
 
-        connect_close_request[sender, main_paned] => move |this| {
-          let (width, height) = this.default_size();
-          let is_maximized = this.is_maximized();
-          let separator = main_paned.position();
-          let new_state = State {
-            width,
-            height,
-            separator_position: separator,
-            is_maximized,
-          };
-
-          sender.input(AppMsg::CloseRequest(new_state));
+        connect_close_request[sender] => move |_this| {
+          sender.input(AppMsg::CloseRequest);
           gtk::glib::Propagation::Stop
         },
 
@@ -241,13 +160,6 @@ impl Component for AppModel {
     }
 
     fn init(_params: (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
-        let state = State::read()
-            .map_err(|e| {
-                warn!("unable to read application state: {}", e);
-                e
-            })
-            .unwrap_or_default();
-
         let about_dialog = AboutDialog::builder()
             .transient_for(&root)
             .launch(())
@@ -256,13 +168,6 @@ impl Component for AppModel {
         let status_bar: Controller<StatusBarModel> = StatusBarModel::builder()
             .launch_with_broker((), &STATUS_BROKER)
             .detach();
-
-        let dialog = DialogModel::builder()
-            .transient_for(&root)
-            .launch(true)
-            .forward(sender.input_sender(), |msg| match msg {
-                DialogOutput::Close => AppMsg::Close,
-            });
 
         let connections = FactoryVecDeque::builder()
             .launch(gtk::ListBox::default())
@@ -292,30 +197,29 @@ impl Component for AppModel {
         let messages_page: Controller<MessagesPageModel> =
             MessagesPageModel::builder().launch(()).detach();
 
-        info!("starting with application state: {:?}", state);
+        let state = State::read().unwrap_or_default();
+        info!("starting with application state: {:?}", &state);
         //let connection_listbox: gtk::ListBox = connections.widget();
         let widgets = view_output!();
+        info!("widgets loaded");
 
         let mut actions = RelmActionGroup::<WindowActionGroup>::new();
 
-        let add_connection_action = {
-            let input_sender = sender.clone();
-            RelmAction::<AddConnection>::new_stateless(move |_| {
-                input_sender.input(AppMsg::ShowConnection);
-            })
-        };
+        let input_sender = sender.clone();
+        let add_connection_action = RelmAction::<AddConnection>::new_stateless(move |_| {
+            input_sender.input(AppMsg::ShowConnection);
+        });
 
-        let about_action = {
-            let about_sender = about_dialog.sender().clone();
-            RelmAction::<AboutAction>::new_stateless(move |_| {
-                about_sender.send(()).unwrap();
-            })
-        };
-
+        let about_sender = about_dialog.sender().clone();
+        let about_action = RelmAction::<AboutAction>::new_stateless(move |_| {
+            about_sender.send(()).unwrap();
+        });
+        info!("adding actions to main windows");
         actions.add_action(add_connection_action);
         actions.add_action(about_action);
         actions.register_for_widget(&widgets.main_window);
 
+        info!("listing all connections");
         let mut repo = Repository::new();
         let conn_list = repo.list_all_connections();
         match conn_list {
@@ -326,39 +230,60 @@ impl Component for AppModel {
             }
             Err(e) => error!("error loading connections: {:?}", e),
         }
-
+        //let main_stk = widgets.main_stack;
         let model = AppModel {
-            state,
+            //state,
             _status_bar: status_bar,
-            dialog,
+            //dialog,
             _about_dialog: about_dialog,
             connections,
-            main_stack: widgets.main_stack.to_owned(),
+            //main_stack: main_stk,
             connection_page,
             topics_page,
             messages_page,
         };
 
+        widgets.load_window_size();
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, msg: Self::Input, _sender: ComponentSender<Self>, _: &Self::Root) {
+    fn update_with_view(
+        &mut self,
+        widgets: &mut Self::Widgets,
+        msg: Self::Input,
+        sender: ComponentSender<Self>,
+        _: &Self::Root,
+    ) {
         match msg {
-            AppMsg::CloseRequest(state) => {
-                self.state = state;
-                self.dialog.sender().send(DialogInput::Show).unwrap();
+            AppMsg::CloseRequest => {
+                let close_alert = gtk::AlertDialog::builder()
+                    .modal(true)
+                    .message("Do you want to close before saving?")
+                    .detail("All unsaved changes will be lost")
+                    .buttons(["Close", "Cancel"])
+                    .default_button(0)
+                    .cancel_button(1)
+                    .build();
+                let alert_sender = sender.clone();
+                close_alert.choose(
+                    Some(&widgets.main_window),
+                    None::<gio::Cancellable>.as_ref(),
+                    move |r| match r {
+                        Ok(0) => alert_sender.input(AppMsg::Close),
+                        Ok(other) => info!("cancelled close {}", other),
+                        Err(e) => warn!("problem on close alert: {}", e.to_string()),
+                    },
+                );
+                close_alert.show(Some(&widgets.main_window));
             }
             AppMsg::Close => {
-                if let Err(e) = self.state.write() {
-                    warn!("unable to write application state: {}", e);
-                }
                 relm4::main_application().quit();
             }
             AppMsg::ShowConnection => {
                 info!("|-->Showing new connection page");
                 self.connection_page.emit(ConnectionPageMsg::New);
                 self.connection_page.widget().set_visible(true);
-                self.main_stack.set_visible_child_name("Connection");
+                widgets.main_stack.set_visible_child_name("Connection");
             }
             AppMsg::AddConnection(conn) => {
                 info!("|-->Adding connection ");
@@ -368,7 +293,7 @@ impl Component for AppModel {
             AppMsg::SaveConnection(maybe_idx, conn) => {
                 info!("|-->Saving connection {:?}", conn);
 
-                self.main_stack.set_visible_child_name("Home");
+                widgets.main_stack.set_visible_child_name("Home");
                 let mut repo = Repository::new();
                 let result = repo.save_connection(&conn);
                 match (maybe_idx, result) {
@@ -397,12 +322,12 @@ impl Component for AppModel {
                 info!("|-->Show edit connection page for {:?}", conn);
                 self.connection_page
                     .emit(ConnectionPageMsg::Edit(index, conn));
-                self.main_stack.set_visible_child_name("Connection");
+                widgets.main_stack.set_visible_child_name("Connection");
             }
             AppMsg::ShowTopicsPage(conn) => {
                 info!("|-->Show edit connection page for {:?}", conn);
                 self.topics_page.emit(TopicsPageMsg::List(conn));
-                self.main_stack.set_visible_child_name("Topics");
+                widgets.main_stack.set_visible_child_name("Topics");
             }
             AppMsg::ShowTopicsPageByIndex(idx) => {
                 let is_connected = self
@@ -423,9 +348,9 @@ impl Component for AppModel {
                         idx, conn
                     );
                     self.topics_page.emit(TopicsPageMsg::List(conn));
-                    self.main_stack.set_visible_child_name("Topics");
+                    widgets.main_stack.set_visible_child_name("Topics");
                 } else {
-                    self.main_stack.set_visible_child_name("Home");
+                    widgets.main_stack.set_visible_child_name("Home");
                 }
             }
             AppMsg::RemoveConnection(index) => {
@@ -434,14 +359,57 @@ impl Component for AppModel {
             AppMsg::ShowMessagesPage(connection, topic) => {
                 self.messages_page
                     .emit(MessagesPageMsg::Open(connection, topic));
-                self.main_stack.set_visible_child_name("Messages");
+                widgets.main_stack.set_visible_child_name("Messages");
             }
         }
+        self.update_view(widgets, sender);
     }
-    fn post_view(&self, widgets: &mut Self::Widgets) {
-        if self.state.is_maximized {
-            info!("should maximize");
-            widgets.main_window.maximize();
+    fn shutdown(&mut self, widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        widgets
+            .save_window_size()
+            .expect("window state should be saved");
+    }
+}
+
+impl AppModelWidgets {
+    fn save_window_size(&self) -> Result<(), glib::BoolError> {
+        let (width, height) = self.main_window.default_size();
+        let is_maximized = self.main_window.is_maximized();
+        let separator = self.main_paned.position();
+        let new_state = State {
+            width,
+            height,
+            separator_position: separator,
+            is_maximized,
         };
+
+        if let Err(e) = new_state.write() {
+            warn!("unable to write application state: {}", e);
+        }
+
+        Ok(())
+    }
+
+    fn load_window_size(&self) {
+        info!("loading window size");
+        let state = State::read()
+            .map_err(|e| {
+                warn!("unable to read application state: {}", e);
+                e
+            })
+            .unwrap_or_default();
+        let width = &state.width;
+        let height = &state.height;
+        let paned_position = &state.separator_position;
+        let is_maximized = &state.is_maximized;
+
+        self.main_window.set_default_size(*width, *height);
+        self.main_paned.set_position(*paned_position);
+
+        if *is_maximized {
+            info!("should maximize");
+            self.main_window.maximize();
+        };
+        info!("window size loaded");
     }
 }

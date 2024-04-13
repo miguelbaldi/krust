@@ -18,10 +18,10 @@ relm4::new_stateless_action!(QuitAction, AppActionGroup, "quit");
 
 fn main() -> Result<(), ()> {
     // Call `gtk::init` manually because we instantiate GTK types in the app model.
-    gtk::init().unwrap();
+    gtk::init().expect("should initialize GTK");
     let filter = filter::Targets::new()
         // Enable the `INFO` level for anything in `my_crate`
-        .with_target("relm4", Level::WARN)
+        .with_target("relm4", Level::INFO)
         // Enable the `DEBUG` level for a specific module.
         .with_target("krust", Level::DEBUG);
     tracing_subscriber::registry()
@@ -30,9 +30,14 @@ fn main() -> Result<(), ()> {
         .with(filter)
         .init();
 
-    info!("Running: {}", APP_ID);
+    info!("starting application: {}", APP_ID);
 
     let app = main_application();
+    app.connect_startup(|_| {
+        info!("initializing database");
+        let mut repo = Repository::new();
+        repo.init().expect("unable to initialize database");
+    });
 
     let mut actions = RelmActionGroup::<AppActionGroup>::new();
 
@@ -49,12 +54,10 @@ fn main() -> Result<(), ()> {
 
     let app = RelmApp::from_app(app);
 
-    let mut repo = Repository::new();
-    repo.init().unwrap();
-
     //let app = RelmApp::new(APP_ID);
     app.set_global_css(include_str!("styles.css"));
     //app.run::<AppModel>(());
+    info!("running application");
     app.visible_on_activate(false).run::<AppModel>(());
     info!("main loop exited");
 

@@ -40,11 +40,11 @@ impl State {
     /// Read from the state file on disk.
     pub fn read() -> Result<Self, ExternalError> {
         let path = state_path()?;
-        Ok(serde_json::from_reader(File::open(path).map_err(|_| {
-            ExternalError::ConfigurationError("unable to find user home directory".into())
+        Ok(serde_json::from_reader(File::open(path).map_err(|e| {
+            ExternalError::ConfigurationError(format!("unable to read state: {:?}", e).into())
         })?)
-        .map_err(|_| {
-            ExternalError::ConfigurationError("unable to find user home directory".into())
+        .map_err(|e| {
+            ExternalError::ConfigurationError(format!("unable to read state: {:?}", e).into())
         })?)
     }
 
@@ -83,7 +83,10 @@ impl Default for State {
 }
 
 pub fn database_connection() -> Result<Connection, ExternalError> {
-    let data_file = ensure_app_config_dir()?.join("application.db");
+    database_connection_with_name(&"application".to_string())
+}
+pub fn database_connection_with_name(database_name: &String) -> Result<Connection, ExternalError> {
+    let data_file = ensure_app_config_dir()?.join(format!("{}.db", database_name));
     Connection::open_with_flags(
         data_file,
         OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -106,6 +109,7 @@ fn state_path() -> Result<PathBuf, ExternalError> {
 
 fn ensure_app_config_dir() -> Result<PathBuf, ExternalError> {
     let app_config_path = app_config_dir()?;
+    info!("app config path: {:?}", app_config_path);
     fs::create_dir_all(&app_config_path).map_err(|op| {
         ExternalError::ConfigurationError(
             format!("unable to create intermediate directories: {:?}", op).into(),

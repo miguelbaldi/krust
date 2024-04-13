@@ -186,8 +186,8 @@ impl Component for TopicsPageModel {
             TopicsPageMsg::List(conn) => {
                 STATUS_BROKER.send(StatusBarMsg::Start);
                 self.current = Some(conn.clone());
-                sender.oneshot_command(async {
-                    let kafka = KafkaBackend::new(conn);
+                sender.oneshot_command(async move {
+                    let kafka = KafkaBackend::new(&conn);
                     let topics = kafka.list_topics().await;
 
                     CommandMsg::ListFinished(topics)

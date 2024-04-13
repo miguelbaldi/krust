@@ -42,3 +42,4 @@ icon.png
 krust-setup.exe
 libs/
 package.zip
+*.log

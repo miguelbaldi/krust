@@ -1,17 +1,23 @@
 [package]
 name = "krust"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 resolver = "2"
+authors = ["Miguel A. Baldi Hörlle <miguel.horlle@gmail.com>"]
+description = "Kafka desktop client"
+repository = "https://github.com/miguelbaldi/krust"
+license-file = "LICENSE.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 anyhow = "1.0.51"
-gtk = { version = "0.8.1", package = "gtk4", features = ["v4_8"] }
+gtk = { version = "0.8.1", package = "gtk4", features = ["v4_10"] }
 adw = { version = "0.6.0", package = "libadwaita", features = ["v1_2"] }
-relm4 = { version = "0.8.0", features = ["libadwaita"] }
-relm4-components = "0.8.0"
+relm4 = { version = "0.8.1", features = ["libadwaita"] }
+relm4-components = "0.8.1"
+tokio = { version = "1.37.0", features = ["full"] }
+tokio-util = "0.7.10"
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 sourceview5 = { version = "0.8.0", features = ["v5_4"] }
 directories = "4.0.1"
@@ -19,9 +25,9 @@ futures = { version = "0.3.25", default-features = false }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.79"
 ron = "0.8"
-tracing = "0.1.37"
-tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
-tracing-tree = "0.2.4"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+tracing-tree = "0.3.0"
 thiserror = "1.0.58"
 chrono = { version = "0.4.37", features = ["serde"] }
 chrono-tz = { version = "0.9.0", features = [ "filter-by-regex" ] }

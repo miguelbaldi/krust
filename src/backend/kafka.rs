@@ -61,8 +61,8 @@ pub struct KafkaBackend {
 }
 
 impl KafkaBackend {
-    pub fn new(config: KrustConnection) -> Self {
-        Self { config: config }
+    pub fn new(config: &KrustConnection) -> Self {
+        Self { config: config.clone() }
     }
 
     fn consumer<C, T>(&self, context: C) -> KafkaResult<T>
@@ -136,7 +136,8 @@ impl KafkaBackend {
         topics
     }
 
-    pub fn topic_message_count(&self, topic: String) -> usize {
+    pub fn topic_message_count(&self, topic: &String) -> usize {
+        info!("couting messages for topic {}", topic);
         let context = CustomContext;
         let consumer: LoggingConsumer = self.consumer(context).expect("Consumer creation failed");
 
@@ -164,17 +165,17 @@ impl KafkaBackend {
             }
             None => warn!(""),
         }
-        debug!("Topic {} has {} messages", topic, message_count);
+        info!("topic {} has {} messages", topic, message_count);
         message_count
     }
-    pub async fn list_messages_for_topic(&self, topic: String) -> Vec<KrustMessage> {
+    pub async fn list_messages_for_topic(&self, topic: &String, total: usize) -> Vec<KrustMessage> {
         let start_mark = Instant::now();
+        info!("starting listing messages for topic {}", topic);
         let topic_name = topic.as_str();
         let context = CustomContext;
         let consumer: LoggingConsumer = self.consumer(context).expect("Consumer creation failed");
 
         debug!("Consumer created");
-        let total = self.topic_message_count(topic.clone());
         let mut counter = 0;
 
         consumer
@@ -228,7 +229,7 @@ impl KafkaBackend {
             };
         }
         let duration = start_mark.elapsed();
-        info!("duration: {:?}", duration);
+        info!("finished listing messages for topic {}, duration: {:?}", topic, duration);
         messages
     }
 }
