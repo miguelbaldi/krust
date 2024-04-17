@@ -45,14 +45,14 @@ impl LabelColumn for HeaderNameColumn {
     }
 
     fn format_cell_value(value: &Self::Value) -> String {
-        format!("{}", value)
+        value.to_string()
     }
 }
 pub struct HeaderValueColumn;
 
 impl HeaderValueColumn {
     fn format_cell_value(value: &String) -> String {
-        format!("{}", value)
+        value.to_string()
     }
     fn get_cell_value(item: &HeaderListItem) -> String {
         item.value.clone().unwrap_or_default()
@@ -207,10 +207,9 @@ impl LabelColumn for MessageValueColumn {
             format!(
                 "{}...",
                 value
-                    .replace("\n", " ")
+                    .replace('\n', " ")
                     .get(0..150)
                     .unwrap_or("")
-                    .to_string()
             )
         } else {
             format!("{}...", value)

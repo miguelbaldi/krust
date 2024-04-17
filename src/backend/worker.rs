@@ -92,7 +92,7 @@ impl MessagesWorker {
                 _ = token.cancelled() => {
                     info!("request {:?} cancelled", &req);
                     // The token was cancelled
-                    MessagesResponse { total: 0, messages: Vec::new(), topic: None, page_operation: req.page_operation.clone(), page_size: req.page_size}
+                    MessagesResponse { total: 0, messages: Vec::new(), topic: None, page_operation: req.page_operation, page_size: req.page_size}
                 }
                 messages = self.get_messages_by_mode(&req) => {
                     messages
@@ -122,9 +122,9 @@ impl MessagesWorker {
         let mut repo = Repository::new();
         let topic_name = &request.topic.name;
         let topic = KrustTopic {
-            connection_id: request.topic.connection_id.clone(),
+            connection_id: request.topic.connection_id,
             name: request.topic.name.clone(),
-            cached: cached,
+            cached,
             partitions: vec![],
         };
         let topic = match repo.save_topic(
@@ -139,7 +139,7 @@ impl MessagesWorker {
         };
         // Run async background task
         let mut mrepo = MessagesRepository::new(topic.connection_id.unwrap(), &topic.name);
-        let total = match request.topic.cached.clone() {
+        let total = match request.topic.cached {
             Some(_) => {
                 if refresh {
                     let cached_total = mrepo.count_messages().unwrap_or_default();
@@ -147,7 +147,7 @@ impl MessagesWorker {
                     let partitions = mrepo.find_offsets().ok();
                     kafka
                     .list_messages_for_topic(
-                        &topic_name,
+                        topic_name,
                         total,
                         Some(&mut mrepo),
                         partitions,
@@ -162,7 +162,7 @@ impl MessagesWorker {
                 mrepo.init().unwrap();
                 kafka
                     .list_messages_for_topic(
-                        &topic_name,
+                        topic_name,
                         total,
                         Some(&mut mrepo),
                         None,
@@ -196,9 +196,9 @@ impl MessagesWorker {
         let kafka = KafkaBackend::new(&request.connection);
         let topic = &request.topic.name;
         // Run async background task
-        let total = kafka.topic_message_count(&topic).await;
+        let total = kafka.topic_message_count(topic).await;
         let messages = kafka
-            .list_messages_for_topic(&topic, total, None, None, Some(KafkaFetch::Oldest))
+            .list_messages_for_topic(topic, total, None, None, Some(KafkaFetch::Oldest))
             .await;
         MessagesResponse {
             total,

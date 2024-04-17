@@ -132,7 +132,7 @@ impl KafkaBackend {
                 connection_id: self.config.id,
                 name: topic.name().to_string(),
                 cached: None,
-                partitions: partitions,
+                partitions,
             });
         }
         topics
@@ -146,7 +146,7 @@ impl KafkaBackend {
         debug!("Consumer created");
 
         let metadata = consumer
-            .fetch_metadata(Some(&topic.as_str()), TIMEOUT)
+            .fetch_metadata(Some(topic.as_str()), TIMEOUT)
             .expect("Failed to fetch metadata");
 
         let mut message_count: usize = 0;
@@ -259,7 +259,7 @@ impl KafkaBackend {
                         offset: m.offset(),
                         timestamp: m.timestamp().to_millis(),
                         value: payload.to_string(),
-                        headers: headers,
+                        headers,
                     };
                     if let Some(repo) = mrepo.as_mut() {
                         match repo.save_message(&message) {

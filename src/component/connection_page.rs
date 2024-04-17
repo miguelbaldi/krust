@@ -130,7 +130,7 @@ impl Component for ConnectionPageModel {
                 .as_ref()
                 .map(|c| c.security_type.clone())
                 .unwrap_or_default(),
-            security_type_combo: security_type_combo,
+            security_type_combo,
             sasl_mechanism: current
                 .borrow()
                 .as_ref()
@@ -226,12 +226,12 @@ impl Component for ConnectionPageModel {
                             id: (move |current: Option<KrustConnection>| current?.id)(
                                 self.current.clone(),
                             ),
-                            name: name,
-                            brokers_list: brokers_list,
-                            sasl_username: sasl_username,
-                            sasl_password: sasl_password,
-                            sasl_mechanism: sasl_mechanism,
-                            security_type: security_type,
+                            name,
+                            brokers_list,
+                            sasl_username,
+                            sasl_password,
+                            sasl_mechanism,
+                            security_type,
                         },
                     ))
                     .unwrap();
@@ -250,7 +250,7 @@ impl Component for ConnectionPageModel {
                 widgets.name_entry.set_text(self.name.clone().as_str());
                 widgets
                     .brokers_entry
-                    .set_text(&self.brokers_list.clone().as_str());
+                    .set_text(self.brokers_list.clone().as_str());
                 let combo_idx = KrustConnectionSecurityType::VALUES
                     .iter()
                     .position(|v| *v == self.security_type)
@@ -260,10 +260,10 @@ impl Component for ConnectionPageModel {
                     .emit(SimpleComboBoxMsg::SetActiveIdx(combo_idx));
                 widgets
                     .sasl_username_entry
-                    .set_text(&&self.sasl_username.clone().as_str());
+                    .set_text(self.sasl_username.clone().as_str());
                 widgets
                     .sasl_password_entry
-                    .set_text(&&self.sasl_password.clone().as_str());
+                    .set_text(self.sasl_password.clone().as_str());
                 let sasl_visible = match &self.security_type {
                     KrustConnectionSecurityType::PLAINTEXT => false,
                     KrustConnectionSecurityType::SASL_PLAINTEXT => true,

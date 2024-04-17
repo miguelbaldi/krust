@@ -359,8 +359,8 @@ impl Component for MessagesPageModel {
             mode: MessagesMode::Live,
             topic: None,
             connection: None,
-            messages_wrapper: messages_wrapper,
-            headers_wrapper: headers_wrapper,
+            messages_wrapper,
+            headers_wrapper,
             page_size_combo,
             page_size: AVAILABLE_PAGE_SIZES[0],
         };
@@ -417,7 +417,7 @@ impl Component for MessagesPageModel {
                     let cloned_topic = self.topic.clone().unwrap();
                     let topic = KrustTopic {
                         name: cloned_topic.name.clone(),
-                        connection_id: cloned_topic.connection_id.clone(),
+                        connection_id: cloned_topic.connection_id,
                         cached: None,
                         partitions: vec![],
                     };
@@ -444,15 +444,15 @@ impl Component for MessagesPageModel {
                 for i in 0..size {
                     if self.messages_wrapper.selection_model.is_selected(i) {
                         let item = self.messages_wrapper.get_visible(i).unwrap();
-                        let partition = item.borrow().partition.clone();
-                        let offset = item.borrow().offset.clone();
+                        let partition = item.borrow().partition;
+                        let offset = item.borrow().offset;
                         let value = item.borrow().value.clone();
                         let clean_value =
                             match serde_json::from_str::<serde_json::Value>(value.as_str()) {
                                 Ok(json) => json.to_string(),
-                                Err(_) => value.replace("\n", ""),
+                                Err(_) => value.replace('\n', ""),
                             };
-                        let timestamp = item.borrow().timestamp.clone();
+                        let timestamp = item.borrow().timestamp;
                         let copy_text = format!(
                             "\n{};{};{};{}",
                             partition,
@@ -473,13 +473,13 @@ impl Component for MessagesPageModel {
                 }
             }
             MessagesPageMsg::Open(connection, topic) => {
-                let conn_id = &connection.id.clone().unwrap();
+                let conn_id = &connection.id.unwrap();
                 let topic_name = &topic.name.clone();
                 self.connection = Some(connection);
                 let mut repo = Repository::new();
                 let maybe_topic = repo.find_topic(*conn_id, topic_name);
                 self.topic = maybe_topic.clone().or(Some(topic));
-                let toggled = maybe_topic.is_some().clone();
+                let toggled = maybe_topic.is_some();
                 let cache_ts = maybe_topic
                     .and_then(|t| {
                         t.cached.map(|ts| {
@@ -490,7 +490,7 @@ impl Component for MessagesPageModel {
                                 .to_string()
                         })
                     })
-                    .unwrap_or(String::default());
+                    .unwrap_or_default();
                 widgets.cache_timestamp.set_label(&cache_ts);
                 widgets.cache_timestamp.set_visible(true);
                 widgets.cache_toggle.set_active(toggled);
@@ -499,7 +499,7 @@ impl Component for MessagesPageModel {
             }
             MessagesPageMsg::GetMessages => {
                 STATUS_BROKER.send(StatusBarMsg::Start);
-                let mode = self.mode.clone();
+                let mode = self.mode;
                 self.mode = match self.mode {
                     MessagesMode::Cached { refresh: _ } => MessagesMode::Cached { refresh: false },
                     MessagesMode::Live => MessagesMode::Live,
@@ -519,11 +519,11 @@ impl Component for MessagesPageModel {
                         .get_messages(
                             token,
                             &MessagesRequest {
-                                mode: mode,
+                                mode,
                                 connection: conn,
                                 topic: topic.clone(),
                                 page_operation: PageOp::Next,
-                                page_size: page_size,
+                                page_size,
                                 offset_partition: (0, 0),
                             },
                         )
@@ -536,7 +536,7 @@ impl Component for MessagesPageModel {
             }
             MessagesPageMsg::GetNextMessages => {
                 STATUS_BROKER.send(StatusBarMsg::Start);
-                let mode = self.mode.clone();
+                let mode = self.mode;
                 let topic = self.topic.clone().unwrap();
                 let conn = self.connection.clone().unwrap();
                 if self.token.is_cancelled() {
@@ -569,11 +569,11 @@ impl Component for MessagesPageModel {
                         .get_messages(
                             token,
                             &MessagesRequest {
-                                mode: mode,
+                                mode,
                                 connection: conn,
                                 topic: topic.clone(),
                                 page_operation: PageOp::Next,
-                                page_size: page_size,
+                                page_size,
                                 offset_partition: (offset, partition),
                             },
                         )
@@ -586,7 +586,7 @@ impl Component for MessagesPageModel {
             }
             MessagesPageMsg::GetPreviousMessages => {
                 STATUS_BROKER.send(StatusBarMsg::Start);
-                let mode = self.mode.clone();
+                let mode = self.mode;
                 let topic = self.topic.clone().unwrap();
                 let conn = self.connection.clone().unwrap();
                 if self.token.is_cancelled() {
@@ -615,11 +615,11 @@ impl Component for MessagesPageModel {
                         .get_messages(
                             token,
                             &MessagesRequest {
-                                mode: mode,
+                                mode,
                                 connection: conn,
                                 topic: topic.clone(),
                                 page_operation: PageOp::Prev,
-                                page_size: page_size,
+                                page_size,
                                 offset_partition: (offset, partition),
                             },
                         )
@@ -645,7 +645,7 @@ impl Component for MessagesPageModel {
                 self.messages_wrapper.clear();
                 self.headers_wrapper.clear();
                 widgets.value_source_view.buffer().set_text("");
-                if response.messages.len() > 0 {
+                if !response.messages.is_empty() {
                     fill_pagination(
                         response.page_operation,
                         widgets,

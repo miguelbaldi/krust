@@ -87,7 +87,7 @@ impl SimpleComponent for StatusBarModel {
                 self.duration = format!(
                     "Took {:?}",
                     self.start_marker
-                        .unwrap_or_else(|| Instant::now())
+                        .unwrap_or_else(Instant::now)
                         .elapsed()
                 );
             }

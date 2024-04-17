@@ -37,7 +37,7 @@ pub struct ConnectionListModel {
 impl From<&mut ConnectionListModel> for KrustConnection {
     fn from(value: &mut ConnectionListModel) -> Self {
         KrustConnection {
-            id: value.id.clone(),
+            id: value.id,
             name: value.name.clone(),
             brokers_list: value.brokers_list.clone(),
             security_type: value.security_type.clone(),

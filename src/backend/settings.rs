@@ -17,12 +17,12 @@ impl Settings {
     /// Read from the state file on disk.
     pub fn read() -> Result<Self, ExternalError> {
         let path = settings_path()?;
-        Ok(serde_json::from_reader(File::open(path).map_err(|e| {
-            ExternalError::ConfigurationError(format!("unable to read state: {:?}", e).into())
+        serde_json::from_reader(File::open(path).map_err(|e| {
+            ExternalError::ConfigurationError(format!("unable to read state: {:?}", e))
         })?)
         .map_err(|e| {
-            ExternalError::ConfigurationError(format!("unable to read state: {:?}", e).into())
-        })?)
+            ExternalError::ConfigurationError(format!("unable to read state: {:?}", e))
+        })
     }
 
     /// Persist to disk.
@@ -36,14 +36,14 @@ impl Settings {
 
         let file = File::create(path).map_err(|op| {
             ExternalError::ConfigurationError(
-                format!("unable to create intermediate directories: {:?}", op).into(),
+                format!("unable to create intermediate directories: {:?}", op),
             )
         })?;
-        Ok(serde_json::to_writer(file, self).map_err(|op| {
+        serde_json::to_writer(file, self).map_err(|op| {
             ExternalError::ConfigurationError(
-                format!("unable to create to write state to disk: {:?}", op).into(),
+                format!("unable to create to write state to disk: {:?}", op),
             )
-        })?)
+        })
     }
 }
 

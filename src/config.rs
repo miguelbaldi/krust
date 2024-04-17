@@ -47,12 +47,12 @@ impl State {
     /// Read from the state file on disk.
     pub fn read() -> Result<Self, ExternalError> {
         let path = state_path()?;
-        Ok(serde_json::from_reader(File::open(path).map_err(|e| {
-            ExternalError::ConfigurationError(format!("unable to read state: {:?}", e).into())
+        serde_json::from_reader(File::open(path).map_err(|e| {
+            ExternalError::ConfigurationError(format!("unable to read state: {:?}", e))
         })?)
         .map_err(|e| {
-            ExternalError::ConfigurationError(format!("unable to read state: {:?}", e).into())
-        })?)
+            ExternalError::ConfigurationError(format!("unable to read state: {:?}", e))
+        })
     }
 
     /// Persist to disk.
@@ -66,14 +66,14 @@ impl State {
 
         let file = File::create(path).map_err(|op| {
             ExternalError::ConfigurationError(
-                format!("unable to create intermediate directories: {:?}", op).into(),
+                format!("unable to create intermediate directories: {:?}", op),
             )
         })?;
-        Ok(serde_json::to_writer(file, self).map_err(|op| {
+        serde_json::to_writer(file, self).map_err(|op| {
             ExternalError::ConfigurationError(
-                format!("unable to create to write state to disk: {:?}", op).into(),
+                format!("unable to create to write state to disk: {:?}", op),
             )
-        })?)
+        })
     }
 }
 
@@ -81,7 +81,7 @@ impl Default for State {
     fn default() -> Self {
         let width: i32 = 900;
         State {
-            width: width,
+            width,
             height: 600,
             separator_position: ((width as f32) * 0.25).round() as i32,
             is_maximized: false,
@@ -122,9 +122,9 @@ fn state_path() -> Result<PathBuf, ExternalError> {
 
 pub fn ensure_path_dir(path: &PathBuf) -> Result<PathBuf, ExternalError> {
     info!("ensuring path: {:?}", path);
-    fs::create_dir_all(&path).map_err(|op| {
+    fs::create_dir_all(path).map_err(|op| {
         ExternalError::ConfigurationError(
-            format!("unable to create intermediate directories: {:?}", op).into(),
+            format!("unable to create intermediate directories: {:?}", op),
         )
     })?;
     Ok(path.clone())

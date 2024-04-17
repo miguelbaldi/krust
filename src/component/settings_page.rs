@@ -85,7 +85,7 @@ impl Component for SettingsPageModel {
         });
         let model = SettingsPageModel {
             cache_dir: current.cache_dir,
-            cache_dir_dialog: cache_dir_dialog,
+            cache_dir_dialog,
         };
         //let security_type_combo = model.security_type_combo.widget();
         let widgets = view_output!();
@@ -118,7 +118,7 @@ impl Component for SettingsPageModel {
             SettingsPageMsg::Save => {
                 let cache_dir = widgets.cache_dir_entry.text().to_string();
                 Settings {
-                    cache_dir: cache_dir,
+                    cache_dir,
                 }
                 .write()
                 .expect("should write current settings");

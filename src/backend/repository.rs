@@ -96,10 +96,10 @@ impl MessagesRepository {
         )
         .unwrap();
         Self {
-            conn: conn,
+            conn,
             topic_name: topic_name.clone(),
             path: path.clone(),
-            database_name: database_name,
+            database_name,
         }
     }
 
@@ -136,11 +136,11 @@ impl MessagesRepository {
         let mut stmt_by_id = self
             .conn
             .prepare_cached("SELECT COUNT(1) FROM kr_message")?;
-        let maybe_count = stmt_by_id
-            .query_row(params![], move |row| Ok(row.get(0)?))
-            .map_err(ExternalError::DatabaseError);
+        
 
-        maybe_count
+        stmt_by_id
+            .query_row(params![], move |row| row.get(0))
+            .map_err(ExternalError::DatabaseError)
     }
 
     // TODO: find latest offsets/partitions
@@ -292,6 +292,12 @@ impl MessagesRepository {
     }
 }
 
+impl Default for Repository {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Repository {
     pub fn new() -> Self {
         let conn = database_connection().expect("problem acquiring database connection");
@@ -334,7 +340,7 @@ impl Repository {
         &mut self,
         konn: &KrustConnection,
     ) -> Result<KrustConnection, ExternalError> {
-        let id = konn.id.clone();
+        let id = konn.id;
         let name = konn.name.clone();
         let brokers = konn.brokers_list.clone();
         let security = konn.security_type.clone();
@@ -372,7 +378,7 @@ impl Repository {
                 up_stmt
         .execute(named_params! { ":id": &konn_to_update.id.unwrap(), ":name": &name, ":brokers": &brokers, ":security": security.to_string(), ":sasl": &sasl, ":sasl_u": &sasl_username, ":sasl_p": &sasl_password })
         .map_err(ExternalError::DatabaseError)
-        .map( |_| {KrustConnection { id: konn_to_update.id, name: name, brokers_list: brokers, security_type: security, sasl_mechanism: sasl, sasl_username: sasl_username, sasl_password: sasl_password }})
+        .map( |_| {KrustConnection { id: konn_to_update.id, name, brokers_list: brokers, security_type: security, sasl_mechanism: sasl, sasl_username, sasl_password }})
             }
             Err(_) => {
                 let mut ins_stmt = self.conn.prepare_cached("INSERT INTO kr_connection (id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword) VALUES (?, ?, ?, ?, ?, ?, ?)  RETURNING id")?;
@@ -390,12 +396,12 @@ impl Repository {
                         |row| {
                             Ok(KrustConnection {
                                 id: row.get(0)?,
-                                name: name,
+                                name,
                                 brokers_list: brokers,
                                 security_type: security,
                                 sasl_mechanism: sasl,
-                                sasl_username: sasl_username,
-                                sasl_password: sasl_password,
+                                sasl_username,
+                                sasl_password,
                             })
                         },
                     )
@@ -411,7 +417,7 @@ impl Repository {
         topic: &KrustTopic,
     ) -> Result<KrustTopic, ExternalError> {
         let name = topic.name.clone();
-        let cached = topic.cached.clone();
+        let cached = topic.cached;
         let mut stmt_by_id = self.conn.prepare_cached(
             "INSERT INTO kr_topic(connection_id, name, cached)
                     VALUES (:cid, :topic, :cached)
@@ -422,18 +428,18 @@ impl Repository {
             Ok(KrustTopic {
                 connection_id: Some(conn_id),
                 name: topic.name.clone(),
-                cached: cached,
+                cached,
                 partitions: vec![],
             })
         };
-        let maybe_topic = stmt_by_id
+        
+
+        stmt_by_id
             .execute(
                 named_params! { ":cid": &conn_id, ":topic": &name.clone(), ":cached": &cached },
             )
             .map(row_to_model)?
-            .map_err(ExternalError::DatabaseError);
-
-        maybe_topic
+            .map_err(ExternalError::DatabaseError)
     }
     pub fn delete_topic(
         &mut self,
@@ -446,11 +452,11 @@ impl Repository {
                   WHERE connection_id = :cid
                     AND name = :topic",
         )?;
-        let maybe_topic = stmt_by_id
-            .execute(named_params! { ":cid": &conn_id, ":topic": &name.clone(),})
-            .map_err(ExternalError::DatabaseError);
+        
 
-        maybe_topic
+        stmt_by_id
+            .execute(named_params! { ":cid": &conn_id, ":topic": &name.clone(),})
+            .map_err(ExternalError::DatabaseError)
     }
 
     pub fn find_topic(&mut self, conn_id: usize, topic_name: &String) -> Option<KrustTopic> {
@@ -498,12 +504,12 @@ impl Repository {
         let result = insert_stmt
             .query_row(params![], |_row| {
                 Ok(KrustMessage {
-                    topic: topic,
-                    partition: partition,
-                    offset: offset,
-                    value: value,
-                    timestamp: timestamp,
-                    headers: headers,
+                    topic,
+                    partition,
+                    offset,
+                    value,
+                    timestamp,
+                    headers,
                 })
             })
             .map_err(ExternalError::DatabaseError)?;

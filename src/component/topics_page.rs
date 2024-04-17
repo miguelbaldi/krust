@@ -149,7 +149,7 @@ impl Component for TopicsPageModel {
         view_wrapper.append_column::<PartitionCountColumn>();
 
         let model = TopicsPageModel {
-            current: current,
+            current,
             topics_wrapper: view_wrapper,
             is_loading: false,
             search_text: String::default(),
@@ -195,7 +195,7 @@ impl Component for TopicsPageModel {
             }
             TopicsPageMsg::OpenTopic(idx) => {
                 let item = self.topics_wrapper.get_visible(idx).unwrap();
-                let conn_id = self.current.as_ref().and_then(|c| c.id).clone();
+                let conn_id = self.current.as_ref().and_then(|c| c.id);
                 let connection = self.current.clone();
                 let topic = KrustTopic {
                     connection_id: conn_id,

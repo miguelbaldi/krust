@@ -333,7 +333,7 @@ impl Component for AppModel {
                                 conn_to_update.sasl_username = new_conn.sasl_username;
                                 conn_to_update.sasl_password = new_conn.sasl_password;
                             }
-                            None => todo!(),
+                            None => warn!("no connection to update"),
                         };
                     }
                     (_, Err(e)) => {
