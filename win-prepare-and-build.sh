@@ -2,9 +2,9 @@
 set -euo pipefail
 
 dnf -y install mingw64-openssl-static mingw64-gcc-c++ zstd cyrus-sasl-devel perl
-curl --connect-timeout 60 -m 60 -L -o /tmp/gtksourceview-5.pkg.tar.zst https://mirror.msys2.org/mingw/mingw64/mingw-w64-x86_64-gtksourceview5-5.12.0-1-any.pkg.tar.zst
-curl --connect-timeout 60 -m 60 -L -o /tmp/cyrus-sasl-2.pkg.tar.zst https://mirror.msys2.org/mingw/mingw64/mingw-w64-x86_64-cyrus-sasl-2.1.28-3-any.pkg.tar.zst
-curl --connect-timeout 60 -m 60 -L -o /tmp/libepoxy-1.5.10-5.pkg.tar.zst https://mirror.msys2.org/mingw/mingw64/mingw-w64-x86_64-libepoxy-1.5.10-5-any.pkg.tar.zst
+curl --connect-timeout 60 -m 60 -L -o /tmp/gtksourceview-5.pkg.tar.zst https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-gtksourceview5-5.12.0-1-any.pkg.tar.zst
+curl --connect-timeout 60 -m 60 -L -o /tmp/cyrus-sasl-2.pkg.tar.zst https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-cyrus-sasl-2.1.28-3-any.pkg.tar.zst
+curl --connect-timeout 60 -m 60 -L -o /tmp/libepoxy-1.5.10-5.pkg.tar.zst https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-libepoxy-1.5.10-5-any.pkg.tar.zst
 cd /tmp
 tar --use-compress-program=unzstd -xvf gtksourceview-5.pkg.tar.zst
 tar --use-compress-program=unzstd -xvf cyrus-sasl-2.pkg.tar.zst

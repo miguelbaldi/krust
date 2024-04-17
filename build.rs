@@ -57,8 +57,13 @@ pub fn compile_resources<P: AsRef<Path>>(source_dirs: &[P], gresource: &str, tar
 
 fn main() {
     compile_resources(
-        &["resources/ui"],
-        "resources/ui/resources.gresource.xml",
-        "resources_ui.gresource",
+        &["data"],
+        "data/resources.gresource.xml",
+        "resources.gresource",
+    );
+    compile_resources(
+        &["data"],
+        "data/icons.gresource.xml",
+        "icons.gresource",
     );
 }

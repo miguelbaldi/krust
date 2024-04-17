@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/org/miguelbaldi/krust/">
+    <file alias="logo.png">images/logo.png</file>
+    <file preprocess="xml-stripblanks" alias="logo.svg">images/logo.svg</file>
+    <file preprocess="xml-stripblanks" alias="logo-no-background.svg">images/logo-no-background.svg</file>
+  </gresource>
+</gresources>

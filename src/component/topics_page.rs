@@ -7,8 +7,8 @@ use tracing::{debug, info};
 
 use crate::{
     backend::{
-        kafka::{KafkaBackend, Topic},
-        repository::KrustConnection,
+        kafka::KafkaBackend,
+        repository::{KrustConnection, KrustTopic},
     },
     component::status_bar::{StatusBarMsg, STATUS_BROKER},
 };
@@ -21,7 +21,7 @@ pub struct TopicListItem {
 }
 
 impl TopicListItem {
-    fn new(value: Topic) -> Self {
+    fn new(value: KrustTopic) -> Self {
         Self {
             name: value.name,
             partition_count: value.partitions.len(),
@@ -88,13 +88,13 @@ pub enum TopicsPageMsg {
 
 #[derive(Debug)]
 pub enum TopicsPageOutput {
-    OpenMessagesPage(KrustConnection, Topic),
+    OpenMessagesPage(KrustConnection, KrustTopic),
 }
 
 #[derive(Debug)]
 pub enum CommandMsg {
     // Data(Vec<KrustMessage>),
-    ListFinished(Vec<Topic>),
+    ListFinished(Vec<KrustTopic>),
 }
 
 #[relm4::component(pub)]
@@ -195,13 +195,17 @@ impl Component for TopicsPageModel {
             }
             TopicsPageMsg::OpenTopic(idx) => {
                 let item = self.topics_wrapper.get_visible(idx).unwrap();
-                let topic = Topic {
+                let conn_id = self.current.as_ref().and_then(|c| c.id).clone();
+                let connection = self.current.clone();
+                let topic = KrustTopic {
+                    connection_id: conn_id,
                     name: item.borrow().name.clone(),
+                    cached: None,
                     partitions: vec![],
                 };
                 sender
                     .output(TopicsPageOutput::OpenMessagesPage(
-                        self.current.clone().unwrap(),
+                        connection.unwrap(),
                         topic,
                     ))
                     .unwrap();

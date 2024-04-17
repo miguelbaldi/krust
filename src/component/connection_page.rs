@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use std::borrow::Borrow;
 
 use gtk::prelude::*;
@@ -110,6 +111,7 @@ impl Component for ConnectionPageModel {
                 sender.input_sender(),
                 ConnectionPageMsg::SecurityTypeChanged,
             );
+            security_type_combo.widget().queue_allocate();
         let current = current_connection.clone();
         let model = ConnectionPageModel {
             current_index: None,
@@ -148,6 +150,7 @@ impl Component for ConnectionPageModel {
         };
         //let security_type_combo = model.security_type_combo.widget();
         let widgets = view_output!();
+        model.security_type_combo.widget().queue_allocate();
         ComponentParts { model, widgets }
     }
 

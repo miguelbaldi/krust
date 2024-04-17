@@ -5,16 +5,16 @@ use rdkafka::consumer::{Consumer, ConsumerContext};
 use rdkafka::error::KafkaResult;
 use rdkafka::message::Headers;
 use rdkafka::topic_partition_list::TopicPartitionList;
-use rdkafka::Message;
-use std::fmt::{self, Display};
+use rdkafka::{Message, Offset};
+
 use std::time::{Duration, Instant};
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
-use crate::backend::repository::{KrustConnection, KrustHeader, KrustMessage};
+use crate::backend::repository::{KrustConnection, KrustHeader, KrustMessage, Partition};
 
-use super::repository::KrustConnectionSecurityType;
+use super::repository::{KrustConnectionSecurityType, KrustTopic, MessagesRepository};
 
-const TIMEOUT: Duration = Duration::from_millis(5000);
+const TIMEOUT: Duration = Duration::from_secs(240);
 
 const GROUP_ID: &str = "krust-kafka-client";
 
@@ -38,21 +38,11 @@ type LoggingConsumer = StreamConsumer<CustomContext>;
 
 // rdkafka: end
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq)]
-pub struct Partition {
-    pub id: i32,
-}
-
-#[derive(Debug, Default, Clone, PartialEq, PartialOrd, Eq)]
-pub struct Topic {
-    pub name: String,
-    pub partitions: Vec<Partition>,
-}
-
-impl Display for Topic {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.name)
-    }
+#[derive(Debug, Clone, Default)]
+pub enum KafkaFetch {
+    #[default]
+    Newest,
+    Oldest,
 }
 
 #[derive(Debug, Clone)]
@@ -62,7 +52,9 @@ pub struct KafkaBackend {
 
 impl KafkaBackend {
     pub fn new(config: &KrustConnection) -> Self {
-        Self { config: config.clone() }
+        Self {
+            config: config.clone(),
+        }
     }
 
     fn consumer<C, T>(&self, context: C) -> KafkaResult<T>
@@ -111,7 +103,7 @@ impl KafkaBackend {
         }
     }
 
-    pub async fn list_topics(&self) -> Vec<Topic> {
+    pub async fn list_topics(&self) -> Vec<KrustTopic> {
         let context = CustomContext;
         let consumer: LoggingConsumer = self.consumer(context).expect("Consumer creation failed");
 
@@ -125,18 +117,28 @@ impl KafkaBackend {
         for topic in metadata.topics() {
             let mut partitions = vec![];
             for partition in topic.partitions() {
-                partitions.push(Partition { id: partition.id() });
+                // let (low, high) = consumer
+                //         .fetch_watermarks(topic.name(), partition.id(), Duration::from_secs(1))
+                //         .map(|(l,h)| (Some(l), Some(h)))
+                //         .unwrap_or((None, None));
+                partitions.push(Partition {
+                    id: partition.id(),
+                    offset_low: None,
+                    offset_high: None,
+                });
             }
 
-            topics.push(Topic {
+            topics.push(KrustTopic {
+                connection_id: self.config.id,
                 name: topic.name().to_string(),
+                cached: None,
                 partitions: partitions,
             });
         }
         topics
     }
 
-    pub fn topic_message_count(&self, topic: &String) -> usize {
+    pub async fn topic_message_count(&self, topic: &String) -> usize {
         info!("couting messages for topic {}", topic);
         let context = CustomContext;
         let consumer: LoggingConsumer = self.consumer(context).expect("Consumer creation failed");
@@ -168,19 +170,57 @@ impl KafkaBackend {
         info!("topic {} has {} messages", topic, message_count);
         message_count
     }
-    pub async fn list_messages_for_topic(&self, topic: &String, total: usize) -> Vec<KrustMessage> {
+    pub async fn list_messages_for_topic(
+        &self,
+        topic: &String,
+        total: usize,
+        mrepo: Option<&mut MessagesRepository>,
+        partitions: Option<Vec<Partition>>,
+        fetch: Option<KafkaFetch>,
+    ) -> Vec<KrustMessage> {
         let start_mark = Instant::now();
+        let fetch = fetch.unwrap_or_default();
+        let mut mrepo = mrepo;
         info!("starting listing messages for topic {}", topic);
         let topic_name = topic.as_str();
         let context = CustomContext;
         let consumer: LoggingConsumer = self.consumer(context).expect("Consumer creation failed");
 
-        debug!("Consumer created");
         let mut counter = 0;
 
-        consumer
-            .subscribe(&[topic_name])
-            .expect("Can't subscribe to specified topics");
+        info!("consumer created");
+        match partitions {
+            Some(partitions) => {
+                let mut partition_list = TopicPartitionList::with_capacity(partitions.capacity());
+                for p in partitions.iter() {
+                    let offset = match fetch {
+                        KafkaFetch::Newest => {
+                            let latest_offset = p.offset_high.unwrap_or_default() + 1;
+                            Offset::from_raw(latest_offset)
+                        }
+                        KafkaFetch::Oldest => Offset::Beginning,
+                    };
+                    partition_list
+                        .add_partition_offset(topic_name, p.id, offset)
+                        .unwrap();
+                }
+                info!("seeking partitions\n{:?}", partition_list);
+                consumer
+                    .assign(&partition_list)
+                    .expect("Can't subscribe to partition list");
+                // let seek_result = consumer.seek_partitions(partition_list, TIMEOUT);
+                // match seek_result {
+                //     Ok(_) => info!("partitions seek completed"),
+                //     Err(ke) => warn!("problem seeking offsets for partitions: {:?}", ke),
+                // }
+            }
+            None => {
+                info!("consuming without seek");
+                consumer
+                    .subscribe(&[topic_name])
+                    .expect("Can't subscribe to specified topics");
+            }
+        };
 
         let mut messages = vec![];
 
@@ -213,23 +253,39 @@ impl KafkaBackend {
                     } else {
                         vec![]
                     };
-                    messages.push(KrustMessage {
-                        id: None,
-                        connection_id: None,
+                    let message = KrustMessage {
                         topic: m.topic().to_string(),
                         partition: m.partition(),
                         offset: m.offset(),
                         timestamp: m.timestamp().to_millis(),
                         value: payload.to_string(),
                         headers: headers,
-                    });
+                    };
+                    if let Some(repo) = mrepo.as_mut() {
+                        match repo.save_message(&message) {
+                            Ok(m) => trace!(
+                                "message [{}][{}][{}] persisted",
+                                m.topic,
+                                m.partition,
+                                m.offset
+                            ),
+                            Err(e) => error!(
+                                "problem persisting message [{}][{}][{}]: {}",
+                                &message.topic, &message.partition, &message.offset, e
+                            ),
+                        }
+                    } else {
+                        messages.push(message);
+                    }
                     counter += 1;
-                    //consumer.commit_message(&m, CommitMode::Async).unwrap();
                 }
             };
         }
         let duration = start_mark.elapsed();
-        info!("finished listing messages for topic {}, duration: {:?}", topic, duration);
+        info!(
+            "finished listing messages for topic {}, duration: {:?}",
+            topic, duration
+        );
         messages
     }
 }

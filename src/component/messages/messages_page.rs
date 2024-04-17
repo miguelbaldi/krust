@@ -1,15 +1,22 @@
+#![allow(deprecated)]
+// See: https://gitlab.gnome.org/GNOME/gtk/-/issues/5644
+use chrono::{TimeZone, Utc};
+use chrono_tz::America;
 use gtk::gdk::DisplayManager;
 use relm4::{typed_view::column::TypedColumnView, *};
 use relm4_components::simple_combo_box::SimpleComboBox;
 use sourceview::prelude::*;
 use sourceview5 as sourceview;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, trace};
+use tracing::{debug, info, trace};
 
 use crate::{
     backend::{
-        kafka::Topic,
-        repository::{KrustConnection, KrustMessage}, worker::{MessagesMode, MessagesRequest, MessagesWorker},
+        repository::{KrustConnection, KrustMessage, KrustTopic},
+        worker::{
+            MessagesCleanupRequest, MessagesMode, MessagesRequest, MessagesResponse,
+            MessagesWorker, PageOp,
+        },
     },
     component::{
         messages::lists::{
@@ -19,12 +26,14 @@ use crate::{
         },
         status_bar::{StatusBarMsg, STATUS_BROKER},
     },
+    Repository, DATE_TIME_FORMAT,
 };
 
 #[derive(Debug)]
 pub struct MessagesPageModel {
     token: CancellationToken,
-    topic: Option<Topic>,
+    topic: Option<KrustTopic>,
+    mode: MessagesMode,
     connection: Option<KrustConnection>,
     messages_wrapper: TypedColumnView<MessageListItem, gtk::MultiSelection>,
     headers_wrapper: TypedColumnView<HeaderListItem, gtk::NoSelection>,
@@ -34,21 +43,25 @@ pub struct MessagesPageModel {
 
 #[derive(Debug)]
 pub enum MessagesPageMsg {
-    Open(KrustConnection, Topic),
+    Open(KrustConnection, KrustTopic),
     GetMessages,
+    GetNextMessages,
+    GetPreviousMessages,
     StopGetMessages,
-    UpdateMessages(Vec<KrustMessage>),
+    RefreshMessages,
+    UpdateMessages(MessagesResponse),
     OpenMessage(u32),
     Selection(u32),
     PageSizeChanged(usize),
+    ToggleMode(bool),
 }
 
 #[derive(Debug)]
 pub enum CommandMsg {
-    Data(Vec<KrustMessage>),
+    Data(MessagesResponse),
 }
 
-const AVAILABLE_PAGE_SIZES: [u16;4] = [50, 100, 500, 1000];
+const AVAILABLE_PAGE_SIZES: [u16; 4] = [50, 100, 500, 1000];
 
 #[relm4::component(pub)]
 impl Component for MessagesPageModel {
@@ -90,11 +103,29 @@ impl Component for MessagesPageModel {
                                 sender.input(MessagesPageMsg::StopGetMessages);
                             },
                         },
+                        #[name(cache_refresh)]
+                        gtk::Button {
+                            set_icon_name: "media-playlist-repeat-symbolic",
+                            set_margin_start: 5,
+                            connect_clicked[sender] => move |_| {
+                                sender.input(MessagesPageMsg::RefreshMessages);
+                            },
+                        },
+                        #[name(cache_toggle)]
                         gtk::ToggleButton {
                             set_margin_start: 5,
                             set_label: "Cache",
                             add_css_class: "krust-toggle",
+                            connect_toggled[sender] => move |btn| {
+                                sender.input(MessagesPageMsg::ToggleMode(btn.is_active()));
+                            },
                         },
+                        #[name(cache_timestamp)]
+                        gtk::Label {
+                            set_margin_start: 5,
+                            set_label: "",
+                            set_visible: false,
+                        }
                     },
                     #[wrap(Some)]
                     set_end_widget = &gtk::Box {
@@ -229,22 +260,69 @@ impl Component for MessagesPageModel {
                         set_orientation: gtk::Orientation::Horizontal,
                         set_halign: gtk::Align::Start,
                         set_hexpand: true,
-                        gtk::Label {
-                            set_label: "Page size",
-                            set_margin_start: 5,
+                        #[name(cached_controls)]
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
+                            set_halign: gtk::Align::Start,
+                            set_hexpand: true,
+                            #[name(first_offset)]
+                            gtk::Label {
+                                set_label: "",
+                                set_visible: false,
+                            },
+                            #[name(first_partition)]
+                            gtk::Label {
+                                set_label: "",
+                                set_visible: false,
+                            },
+                            #[name(last_offset)]
+                            gtk::Label {
+                                set_label: "",
+                                set_visible: false,
+                            },
+                            #[name(last_partition)]
+                            gtk::Label {
+                                set_label: "",
+                                set_visible: false,
+                            },
+                            gtk::Label {
+                                set_label: "Page size",
+                                set_margin_start: 5,
+                            },
+                            model.page_size_combo.widget() -> &gtk::ComboBoxText {
+                                set_margin_start: 5,
+                            },
+                            #[name(btn_previous_page)]
+                            gtk::Button {
+                                set_margin_start: 5,
+                                set_icon_name: "go-previous",
+                                connect_clicked[sender] => move |_| {
+                                    sender.input(MessagesPageMsg::GetPreviousMessages);
+                                },
+                            },
+                            #[name(btn_next_page)]
+                            gtk::Button {
+                                set_margin_start: 5,
+                                set_icon_name: "go-next",
+                                connect_clicked[sender] => move |_| {
+                                    sender.input(MessagesPageMsg::GetNextMessages);
+                                },
+                            },
                         },
-                        model.page_size_combo.widget() -> &gtk::ComboBoxText {
-                            set_margin_start: 5,
-                        },
-                        #[name(btn_previous_page)]
-                        gtk::Button {
-                            set_margin_start: 5,
-                            set_icon_name: "go-previous",
-                        },
-                        #[name(btn_next_page)]
-                        gtk::Button {
-                            set_margin_start: 5,
-                            set_icon_name: "go-next",
+                        #[name(live_controls)]
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
+                            set_halign: gtk::Align::Start,
+                            set_hexpand: true,
+                            gtk::Label {
+                                set_label: "Max messages",
+                                set_margin_start: 5,
+                            },
+                            #[name(max_messages)]
+                            gtk::Entry {
+                                set_margin_start: 5,
+                                set_width_chars: 10,
+                            },
                         },
                     },
                 },
@@ -270,17 +348,15 @@ impl Component for MessagesPageModel {
         headers_wrapper.append_column::<HeaderValueColumn>();
         let default_idx = 0;
         let page_size_combo = SimpleComboBox::builder()
-        .launch(SimpleComboBox {
-            variants: AVAILABLE_PAGE_SIZES.to_vec(),
-            active_index: Some(default_idx),
-        })
-        .forward(
-            sender.input_sender(),
-            MessagesPageMsg::PageSizeChanged,
-        );
-
+            .launch(SimpleComboBox {
+                variants: AVAILABLE_PAGE_SIZES.to_vec(),
+                active_index: Some(default_idx),
+            })
+            .forward(sender.input_sender(), MessagesPageMsg::PageSizeChanged);
+        page_size_combo.widget().queue_allocate();
         let model = MessagesPageModel {
             token: CancellationToken::new(),
+            mode: MessagesMode::Live,
             topic: None,
             connection: None,
             messages_wrapper: messages_wrapper,
@@ -293,11 +369,11 @@ impl Component for MessagesPageModel {
         let headers_view = &model.headers_wrapper.view;
         let sender_for_selection = sender.clone();
         messages_view
-        .model()
-        .unwrap()
-        .connect_selection_changed(move |selection_model, _, _| {
-            sender_for_selection.input(MessagesPageMsg::Selection(selection_model.n_items()));
-        });
+            .model()
+            .unwrap()
+            .connect_selection_changed(move |selection_model, _, _| {
+                sender_for_selection.input(MessagesPageMsg::Selection(selection_model.n_items()));
+            });
         let sender_for_activate = sender.clone();
         messages_view.connect_activate(move |_view, idx| {
             sender_for_activate.input(MessagesPageMsg::OpenMessage(idx));
@@ -306,10 +382,10 @@ impl Component for MessagesPageModel {
         let widgets = view_output!();
 
         let buffer = widgets
-        .value_source_view
-        .buffer()
-        .downcast::<sourceview::Buffer>()
-        .expect("sourceview was not backed by sourceview buffer");
+            .value_source_view
+            .buffer()
+            .downcast::<sourceview::Buffer>()
+            .expect("sourceview was not backed by sourceview buffer");
 
         if let Some(scheme) = &sourceview::StyleSchemeManager::new().scheme("oblivion") {
             buffer.set_style_scheme(Some(scheme));
@@ -328,12 +404,39 @@ impl Component for MessagesPageModel {
         _: &Self::Root,
     ) {
         match msg {
+            MessagesPageMsg::ToggleMode(toggle) => {
+                self.mode = if toggle {
+                    widgets.cached_controls.set_visible(true);
+                    widgets.live_controls.set_visible(false);
+                    MessagesMode::Cached { refresh: false }
+                } else {
+                    widgets.live_controls.set_visible(true);
+                    widgets.cached_controls.set_visible(false);
+                    widgets.cache_timestamp.set_visible(false);
+                    widgets.cache_timestamp.set_text("");
+                    let cloned_topic = self.topic.clone().unwrap();
+                    let topic = KrustTopic {
+                        name: cloned_topic.name.clone(),
+                        connection_id: cloned_topic.connection_id.clone(),
+                        cached: None,
+                        partitions: vec![],
+                    };
+                    let conn = self.connection.clone().unwrap();
+                    MessagesWorker::new().cleanup_messages(&MessagesCleanupRequest {
+                        connection: conn,
+                        topic: topic.clone(),
+                    });
+                    self.topic = Some(topic);
+                    MessagesMode::Live
+                };
+            }
             MessagesPageMsg::PageSizeChanged(_idx) => {
                 let page_size = match self.page_size_combo.model().get_active_elem() {
                     Some(ps) => *ps,
                     None => AVAILABLE_PAGE_SIZES[0],
                 };
                 self.page_size = page_size;
+                self.page_size_combo.widget().queue_allocate();
             }
             MessagesPageMsg::Selection(size) => {
                 let mut copy_content = String::from("PARTITION;OFFSET;VALUE;TIMESTAMP");
@@ -345,10 +448,10 @@ impl Component for MessagesPageModel {
                         let offset = item.borrow().offset.clone();
                         let value = item.borrow().value.clone();
                         let clean_value =
-                        match serde_json::from_str::<serde_json::Value>(value.as_str()) {
-                            Ok(json) => json.to_string(),
-                            Err(_) => value.replace("\n", ""),
-                        };
+                            match serde_json::from_str::<serde_json::Value>(value.as_str()) {
+                                Ok(json) => json.to_string(),
+                                Err(_) => value.replace("\n", ""),
+                            };
                         let timestamp = item.borrow().timestamp.clone();
                         let copy_text = format!(
                             "\n{};{};{};{}",
@@ -363,53 +466,218 @@ impl Component for MessagesPageModel {
                 }
                 if copy_content.len() > min_length {
                     DisplayManager::get()
-                    .default_display()
-                    .unwrap()
-                    .clipboard()
-                    .set_text(copy_content.as_str());
+                        .default_display()
+                        .unwrap()
+                        .clipboard()
+                        .set_text(copy_content.as_str());
                 }
             }
             MessagesPageMsg::Open(connection, topic) => {
+                let conn_id = &connection.id.clone().unwrap();
+                let topic_name = &topic.name.clone();
                 self.connection = Some(connection);
-                self.topic = Some(topic);
+                let mut repo = Repository::new();
+                let maybe_topic = repo.find_topic(*conn_id, topic_name);
+                self.topic = maybe_topic.clone().or(Some(topic));
+                let toggled = maybe_topic.is_some().clone();
+                let cache_ts = maybe_topic
+                    .and_then(|t| {
+                        t.cached.map(|ts| {
+                            Utc.timestamp_millis_opt(ts)
+                                .unwrap()
+                                .with_timezone(&America::Sao_Paulo)
+                                .format(DATE_TIME_FORMAT)
+                                .to_string()
+                        })
+                    })
+                    .unwrap_or(String::default());
+                widgets.cache_timestamp.set_label(&cache_ts);
+                widgets.cache_timestamp.set_visible(true);
+                widgets.cache_toggle.set_active(toggled);
+                self.page_size_combo.widget().queue_allocate();
+                sender.input(MessagesPageMsg::ToggleMode(toggled));
             }
             MessagesPageMsg::GetMessages => {
                 STATUS_BROKER.send(StatusBarMsg::Start);
-                let topic_name = self.topic.clone().unwrap().name;
+                let mode = self.mode.clone();
+                self.mode = match self.mode {
+                    MessagesMode::Cached { refresh: _ } => MessagesMode::Cached { refresh: false },
+                    MessagesMode::Live => MessagesMode::Live,
+                };
+                let topic = self.topic.clone().unwrap();
                 let conn = self.connection.clone().unwrap();
                 if self.token.is_cancelled() {
                     self.token = CancellationToken::new();
                 }
+                let page_size = self.page_size;
                 let token = self.token.clone();
+                widgets.pag_current_entry.set_text("0");
                 sender.oneshot_command(async move {
-                    let topic = topic_name.clone();
                     // Run async background task
                     let messages_worker = MessagesWorker::new();
-                    let result = &messages_worker.get_messages(token, &MessagesRequest {
-                        mode: MessagesMode::Live,
-                        connection: conn,
-                        topic_name: topic.clone(),
-                    }).await.unwrap();
+                    let result = &messages_worker
+                        .get_messages(
+                            token,
+                            &MessagesRequest {
+                                mode: mode,
+                                connection: conn,
+                                topic: topic.clone(),
+                                page_operation: PageOp::Next,
+                                page_size: page_size,
+                                offset_partition: (0, 0),
+                            },
+                        )
+                        .await
+                        .unwrap();
                     let total = result.total;
-                    let messages = &result.messages;
-                    trace!("selected topic {} with {} messages", &topic, &total,);
-                    CommandMsg::Data(messages.to_vec())
+                    trace!("selected topic {} with {} messages", topic.name, &total,);
+                    CommandMsg::Data(result.clone())
                 });
+            }
+            MessagesPageMsg::GetNextMessages => {
+                STATUS_BROKER.send(StatusBarMsg::Start);
+                let mode = self.mode.clone();
+                let topic = self.topic.clone().unwrap();
+                let conn = self.connection.clone().unwrap();
+                if self.token.is_cancelled() {
+                    self.token = CancellationToken::new();
+                }
+                let page_size = self.page_size;
+                let (offset, partition) = (
+                    widgets
+                        .last_offset
+                        .text()
+                        .to_string()
+                        .parse::<usize>()
+                        .unwrap(),
+                    widgets
+                        .last_partition
+                        .text()
+                        .to_string()
+                        .parse::<usize>()
+                        .unwrap(),
+                );
+                let token = self.token.clone();
+                info!(
+                    "getting next messages [page_size={}, last_offset={}, last_partition={}]",
+                    page_size, offset, partition
+                );
+                sender.oneshot_command(async move {
+                    // Run async background task
+                    let messages_worker = MessagesWorker::new();
+                    let result = &messages_worker
+                        .get_messages(
+                            token,
+                            &MessagesRequest {
+                                mode: mode,
+                                connection: conn,
+                                topic: topic.clone(),
+                                page_operation: PageOp::Next,
+                                page_size: page_size,
+                                offset_partition: (offset, partition),
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    let total = result.total;
+                    trace!("selected topic {} with {} messages", topic.name, &total,);
+                    CommandMsg::Data(result.clone())
+                });
+            }
+            MessagesPageMsg::GetPreviousMessages => {
+                STATUS_BROKER.send(StatusBarMsg::Start);
+                let mode = self.mode.clone();
+                let topic = self.topic.clone().unwrap();
+                let conn = self.connection.clone().unwrap();
+                if self.token.is_cancelled() {
+                    self.token = CancellationToken::new();
+                }
+                let page_size = self.page_size;
+                let (offset, partition) = (
+                    widgets
+                        .first_offset
+                        .text()
+                        .to_string()
+                        .parse::<usize>()
+                        .unwrap(),
+                    widgets
+                        .first_partition
+                        .text()
+                        .to_string()
+                        .parse::<usize>()
+                        .unwrap(),
+                );
+                let token = self.token.clone();
+                sender.oneshot_command(async move {
+                    // Run async background task
+                    let messages_worker = MessagesWorker::new();
+                    let result = &messages_worker
+                        .get_messages(
+                            token,
+                            &MessagesRequest {
+                                mode: mode,
+                                connection: conn,
+                                topic: topic.clone(),
+                                page_operation: PageOp::Prev,
+                                page_size: page_size,
+                                offset_partition: (offset, partition),
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    let total = result.total;
+                    trace!("selected topic {} with {} messages", topic.name, &total,);
+                    CommandMsg::Data(result.clone())
+                });
+            }
+            MessagesPageMsg::RefreshMessages => {
+                info!("refreshing cached messages");
+                self.mode = MessagesMode::Cached { refresh: true };
+                sender.input(MessagesPageMsg::GetMessages);
             }
             MessagesPageMsg::StopGetMessages => {
                 info!("cancelling get messages...");
                 self.token.cancel();
             }
-            MessagesPageMsg::UpdateMessages(messages) => {
-                let total = messages.len();
+            MessagesPageMsg::UpdateMessages(response) => {
+                let total = response.total;
+                self.topic = response.topic.clone();
                 self.messages_wrapper.clear();
                 self.headers_wrapper.clear();
                 widgets.value_source_view.buffer().set_text("");
-                self.messages_wrapper
-                .extend_from_iter(messages.iter().map(|m| MessageListItem::new(m.clone())));
+                if response.messages.len() > 0 {
+                    fill_pagination(
+                        response.page_operation,
+                        widgets,
+                        total,
+                        response.page_size,
+                        response.messages.first().unwrap(),
+                        response.messages.last().unwrap(),
+                    );
+                }
+                self.messages_wrapper.extend_from_iter(
+                    response
+                        .messages
+                        .iter()
+                        .map(|m| MessageListItem::new(m.clone())),
+                );
                 widgets.value_source_view.buffer().set_text("");
+                let cache_ts = response
+                    .topic
+                    .and_then(|t| {
+                        t.cached.map(|ts| {
+                            Utc.timestamp_millis_opt(ts)
+                                .unwrap()
+                                .with_timezone(&America::Sao_Paulo)
+                                .format(DATE_TIME_FORMAT)
+                                .to_string()
+                        })
+                    })
+                    .unwrap_or(String::default());
+                widgets.cache_timestamp.set_label(&cache_ts);
+                widgets.cache_timestamp.set_visible(true);
                 STATUS_BROKER.send(StatusBarMsg::StopWithInfo {
-                    text: Some(format!("{} messages loaded!", total)),
+                    text: Some(format!("{} messages loaded!", response.messages.len())),
                 });
             }
             MessagesPageMsg::OpenMessage(message_idx) => {
@@ -417,13 +685,13 @@ impl Component for MessagesPageModel {
                 let message_text = item.borrow().value.clone();
 
                 let buffer = widgets
-                .value_source_view
-                .buffer()
-                .downcast::<sourceview::Buffer>()
-                .expect("sourceview was not backed by sourceview buffer");
+                    .value_source_view
+                    .buffer()
+                    .downcast::<sourceview::Buffer>()
+                    .expect("sourceview was not backed by sourceview buffer");
 
                 let valid_json: Result<serde_json::Value, _> =
-                serde_json::from_str(message_text.as_str());
+                    serde_json::from_str(message_text.as_str());
                 let (language, formatted_text) = match valid_json {
                     Ok(jt) => (
                         sourceview::LanguageManager::default().language("json"),
@@ -440,7 +708,7 @@ impl Component for MessagesPageModel {
                 self.headers_wrapper.clear();
                 for header in item.borrow().headers.iter() {
                     self.headers_wrapper
-                    .append(HeaderListItem::new(header.clone()));
+                        .append(HeaderListItem::new(header.clone()));
                 }
             }
         };
@@ -456,6 +724,63 @@ impl Component for MessagesPageModel {
     ) {
         match message {
             CommandMsg::Data(messages) => sender.input(MessagesPageMsg::UpdateMessages(messages)),
+        }
+    }
+}
+
+fn fill_pagination(
+    page_op: PageOp,
+    widgets: &mut MessagesPageModelWidgets,
+    total: usize,
+    page_size: u16,
+    first: &KrustMessage,
+    last: &KrustMessage,
+) {
+    let current_page: usize = widgets
+        .pag_current_entry
+        .text()
+        .to_string()
+        .parse::<usize>()
+        .unwrap_or_default();
+    let current_page = match page_op {
+        PageOp::Next => current_page + 1,
+        PageOp::Prev => current_page - 1,
+    };
+    widgets.pag_total_entry.set_text(total.to_string().as_str());
+    widgets
+        .pag_current_entry
+        .set_text(current_page.to_string().as_str());
+    let pages = ((total as f64) / (page_size as f64)).ceil() as usize;
+    widgets.pag_last_entry.set_text(pages.to_string().as_str());
+    let first_offset = first.offset;
+    let first_partition = first.partition;
+    let last_offset = last.offset;
+    let last_partition = last.partition;
+    widgets
+        .first_offset
+        .set_text(first_offset.to_string().as_str());
+    widgets
+        .first_partition
+        .set_text(first_partition.to_string().as_str());
+    widgets
+        .last_offset
+        .set_text(last_offset.to_string().as_str());
+    widgets
+        .last_partition
+        .set_text(last_partition.to_string().as_str());
+    debug!("fill pagination of current page {}", current_page);
+    match current_page {
+        1 => {
+            widgets.btn_previous_page.set_sensitive(false);
+            widgets.btn_next_page.set_sensitive(true);
+        }
+        n if n >= pages => {
+            widgets.btn_next_page.set_sensitive(false);
+            widgets.btn_previous_page.set_sensitive(true);
+        }
+        _ => {
+            widgets.btn_next_page.set_sensitive(true);
+            widgets.btn_previous_page.set_sensitive(true);
         }
     }
 }

@@ -3,9 +3,10 @@
 
 #define MyAppName "KRust"
 #define MyAppVersion "0.0.1"
-#define MyAppPublisher "Miguel A. Baldi Hörlle"
+#define MyAppPublisher "Miguel A. Baldi HÃ¶rlle"
 #define MyAppURL "https://github.com/miguelbaldi/krust"
 #define MyAppExeName "krust.exe"
+#define MyAppIcoName "krust.ico"
 
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application. Do not use the same AppId value in installers for other applications.
@@ -36,6 +37,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
+Source: "{#MyAppIcoName}"; DestDir: "{app}";
 Source: "package\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "package\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
@@ -43,7 +45,7 @@ Source: "package\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs creat
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppIcoName}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
