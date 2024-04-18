@@ -1,9 +1,9 @@
 use chrono::Utc;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
-use crate::Repository;
+use crate::{config::ExternalError, Repository};
 
 use super::{
     kafka::{KafkaBackend, KafkaFetch},
@@ -84,7 +84,7 @@ impl MessagesWorker {
         self,
         token: CancellationToken,
         request: &MessagesRequest,
-    ) -> Result<MessagesResponse, String> {
+    ) -> Result<MessagesResponse, ExternalError> {
         let req = request.clone();
         let join_handle = tokio::spawn(async move {
             // Wait for either cancellation or a very long time
@@ -92,23 +92,29 @@ impl MessagesWorker {
                 _ = token.cancelled() => {
                     info!("request {:?} cancelled", &req);
                     // The token was cancelled
-                    MessagesResponse { total: 0, messages: Vec::new(), topic: None, page_operation: req.page_operation, page_size: req.page_size}
+                    Ok(MessagesResponse { total: 0, messages: Vec::new(), topic: None, page_operation: req.page_operation, page_size: req.page_size})
                 }
                 messages = self.get_messages_by_mode(&req) => {
                     messages
                 }
             }
         });
-        join_handle.await.map_err(|e| e.to_string())
+        join_handle.await?
     }
 
-    async fn get_messages_by_mode(self, request: &MessagesRequest) -> MessagesResponse {
+    async fn get_messages_by_mode(
+        self,
+        request: &MessagesRequest,
+    ) -> Result<MessagesResponse, ExternalError> {
         match request.mode {
             MessagesMode::Live => self.get_messages_live(request).await,
             MessagesMode::Cached { refresh: _ } => self.get_messages_cached(request).await,
         }
     }
-    async fn get_messages_cached(self, request: &MessagesRequest) -> MessagesResponse {
+    async fn get_messages_cached(
+        self,
+        request: &MessagesRequest,
+    ) -> Result<MessagesResponse, ExternalError> {
         let refresh = match request.mode {
             MessagesMode::Live => false,
             MessagesMode::Cached { refresh } => refresh,
@@ -127,16 +133,10 @@ impl MessagesWorker {
             cached,
             partitions: vec![],
         };
-        let topic = match repo.save_topic(
+        let topic = repo.save_topic(
             topic.connection_id.expect("should have connection id"),
             &topic,
-        ) {
-            Ok(saved_topic) => saved_topic,
-            Err(e) => {
-                error!("problem saving topic: {:?}", e);
-                topic
-            }
-        };
+        )?;
         // Run async background task
         let mut mrepo = MessagesRepository::new(topic.connection_id.unwrap(), &topic.name);
         let total = match request.topic.cached {
@@ -146,14 +146,15 @@ impl MessagesWorker {
                     let total = kafka.topic_message_count(&topic.name).await - cached_total;
                     let partitions = mrepo.find_offsets().ok();
                     kafka
-                    .list_messages_for_topic(
-                        topic_name,
-                        total,
-                        Some(&mut mrepo),
-                        partitions,
-                        Some(KafkaFetch::Newest),
-                    )
-                    .await;
+                        .cache_messages_for_topic(
+                            topic_name,
+                            total,
+                            &mut mrepo,
+                            partitions,
+                            Some(KafkaFetch::Newest),
+                        )
+                        .await
+                        .unwrap();
                 }
                 mrepo.count_messages().unwrap_or_default()
             }
@@ -161,14 +162,15 @@ impl MessagesWorker {
                 let total = kafka.topic_message_count(&topic.name).await;
                 mrepo.init().unwrap();
                 kafka
-                    .list_messages_for_topic(
+                    .cache_messages_for_topic(
                         topic_name,
                         total,
-                        Some(&mut mrepo),
+                        &mut mrepo,
                         None,
                         Some(KafkaFetch::Oldest),
                     )
-                    .await;
+                    .await
+                    .unwrap();
                 total
             }
         };
@@ -183,29 +185,31 @@ impl MessagesWorker {
                 .find_prev_messages(request.page_size, request.offset_partition)
                 .unwrap(),
         };
-        MessagesResponse {
+        Ok(MessagesResponse {
             total,
             messages,
             topic: Some(topic),
             page_operation: request.page_operation,
             page_size: request.page_size,
-        }
+        })
     }
 
-    async fn get_messages_live(self, request: &MessagesRequest) -> MessagesResponse {
+    async fn get_messages_live(
+        self,
+        request: &MessagesRequest,
+    ) -> Result<MessagesResponse, ExternalError> {
         let kafka = KafkaBackend::new(&request.connection);
         let topic = &request.topic.name;
         // Run async background task
         let total = kafka.topic_message_count(topic).await;
-        let messages = kafka
-            .list_messages_for_topic(topic, total, None, None, Some(KafkaFetch::Oldest))
-            .await;
-        MessagesResponse {
+        let duration = kafka.list_messages_for_topic(topic, total).await?;
+        info!("get_messages_live {:?}", duration);
+        Ok(MessagesResponse {
             total,
-            messages,
+            messages: vec![],
             topic: Some(request.topic.clone()),
             page_operation: request.page_operation,
             page_size: request.page_size,
-        }
+        })
     }
 }

@@ -8,9 +8,11 @@ use rdkafka::topic_partition_list::TopicPartitionList;
 use rdkafka::{Message, Offset};
 
 use std::time::{Duration, Instant};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use crate::backend::repository::{KrustConnection, KrustHeader, KrustMessage, Partition};
+use crate::component::messages::messages_page::{MessagesPageMsg, LIVE_MESSAGES_BROKER};
+use crate::config::ExternalError;
 
 use super::repository::{KrustConnectionSecurityType, KrustTopic, MessagesRepository};
 
@@ -170,22 +172,21 @@ impl KafkaBackend {
         info!("topic {} has {} messages", topic, message_count);
         message_count
     }
-    pub async fn list_messages_for_topic(
+    pub async fn cache_messages_for_topic(
         &self,
         topic: &String,
         total: usize,
-        mrepo: Option<&mut MessagesRepository>,
+        mrepo: &mut MessagesRepository,
         partitions: Option<Vec<Partition>>,
         fetch: Option<KafkaFetch>,
-    ) -> Vec<KrustMessage> {
+    ) -> Result<Duration, ExternalError> {
         let start_mark = Instant::now();
         let fetch = fetch.unwrap_or_default();
-        let mut mrepo = mrepo;
         info!("starting listing messages for topic {}", topic);
         let topic_name = topic.as_str();
         let context = CustomContext;
         let consumer: LoggingConsumer = self.consumer(context).expect("Consumer creation failed");
-
+        let conn = mrepo.get_connection();
         let mut counter = 0;
 
         info!("consumer created");
@@ -208,11 +209,6 @@ impl KafkaBackend {
                 consumer
                     .assign(&partition_list)
                     .expect("Can't subscribe to partition list");
-                // let seek_result = consumer.seek_partitions(partition_list, TIMEOUT);
-                // match seek_result {
-                //     Ok(_) => info!("partitions seek completed"),
-                //     Err(ke) => warn!("problem seeking offsets for partitions: {:?}", ke),
-                // }
             }
             None => {
                 info!("consuming without seek");
@@ -222,7 +218,72 @@ impl KafkaBackend {
             }
         };
 
-        let mut messages = vec![];
+        while counter < total {
+            match consumer.recv().await {
+                Err(e) => warn!("Kafka error: {}", e),
+                Ok(m) => {
+                    let payload = match m.payload_view::<str>() {
+                        None => "",
+                        Some(Ok(s)) => s,
+                        Some(Err(e)) => {
+                            warn!("Error while deserializing message payload: {:?}", e);
+                            ""
+                        }
+                    };
+                    trace!("key: '{:?}', payload: '{}', topic: {}, partition: {}, offset: {}, timestamp: {:?}",
+                        m.key(), payload, m.topic(), m.partition(), m.offset(), m.timestamp());
+                    let headers = if let Some(headers) = m.headers() {
+                        let mut header_list: Vec<KrustHeader> = vec![];
+                        for header in headers.iter() {
+                            let h = KrustHeader {
+                                key: header.key.to_string(),
+                                value: header
+                                    .value
+                                    .map(|v| String::from_utf8(v.to_vec()).unwrap_or_default()),
+                            };
+                            header_list.push(h);
+                        }
+                        header_list
+                    } else {
+                        vec![]
+                    };
+                    let message = KrustMessage {
+                        topic: m.topic().to_string(),
+                        partition: m.partition(),
+                        offset: m.offset(),
+                        timestamp: m.timestamp().to_millis(),
+                        value: payload.to_string(),
+                        headers,
+                    };
+                    mrepo.save_message(&conn, &message)?;
+                    counter += 1;
+                }
+            };
+        }
+        let duration = start_mark.elapsed();
+        info!(
+            "finished listing messages for topic {}, duration: {:?}",
+            topic, duration
+        );
+        core::result::Result::Ok(duration)
+    }
+    pub async fn list_messages_for_topic(
+        &self,
+        topic: &String,
+        total: usize,
+    ) -> Result<Duration, ExternalError> {
+        let start_mark = Instant::now();
+        info!("starting listing messages for topic {}", topic);
+        let topic_name = topic.as_str();
+        let context = CustomContext;
+        let consumer: LoggingConsumer = self.consumer(context).expect("Consumer creation failed");
+
+        let mut counter = 0;
+
+        info!("consumer created");
+        consumer
+            .subscribe(&[topic_name])
+            .expect("Can't subscribe to specified topics");
 
         while counter < total {
             match consumer.recv().await {
@@ -261,22 +322,8 @@ impl KafkaBackend {
                         value: payload.to_string(),
                         headers,
                     };
-                    if let Some(repo) = mrepo.as_mut() {
-                        match repo.save_message(&message) {
-                            Ok(m) => trace!(
-                                "message [{}][{}][{}] persisted",
-                                m.topic,
-                                m.partition,
-                                m.offset
-                            ),
-                            Err(e) => error!(
-                                "problem persisting message [{}][{}][{}]: {}",
-                                &message.topic, &message.partition, &message.offset, e
-                            ),
-                        }
-                    } else {
-                        messages.push(message);
-                    }
+
+                    LIVE_MESSAGES_BROKER.send(MessagesPageMsg::UpdateMessage(message));
                     counter += 1;
                 }
             };
@@ -286,6 +333,6 @@ impl KafkaBackend {
             "finished listing messages for topic {}, duration: {:?}",
             topic, duration
         );
-        messages
+        Ok(duration)
     }
 }

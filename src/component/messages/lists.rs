@@ -196,7 +196,7 @@ impl LabelColumn for MessageValueColumn {
     const COLUMN_NAME: &'static str = "Value";
     const ENABLE_RESIZE: bool = true;
     const ENABLE_EXPAND: bool = true;
-    const ENABLE_SORT: bool = true;
+    const ENABLE_SORT: bool = false;
 
     fn get_cell_value(item: &Self::Item) -> Self::Value {
         item.value.clone()

@@ -2,7 +2,7 @@
 // See: https://gitlab.gnome.org/GNOME/gtk/-/issues/5644
 use chrono::{TimeZone, Utc};
 use chrono_tz::America;
-use gtk::gdk::DisplayManager;
+use gtk::{gdk::DisplayManager, ColumnViewSorter};
 use relm4::{typed_view::column::TypedColumnView, *};
 use relm4_components::simple_combo_box::SimpleComboBox;
 use sourceview::prelude::*;
@@ -29,6 +29,8 @@ use crate::{
     Repository, DATE_TIME_FORMAT,
 };
 
+pub static LIVE_MESSAGES_BROKER: MessageBroker<MessagesPageMsg> = MessageBroker::new();
+
 #[derive(Debug)]
 pub struct MessagesPageModel {
     token: CancellationToken,
@@ -50,6 +52,7 @@ pub enum MessagesPageMsg {
     StopGetMessages,
     RefreshMessages,
     UpdateMessages(MessagesResponse),
+    UpdateMessage(KrustMessage),
     OpenMessage(u32),
     Selection(u32),
     PageSizeChanged(usize),
@@ -236,24 +239,31 @@ impl Component for MessagesPageModel {
                         set_orientation: gtk::Orientation::Horizontal,
                         set_halign: gtk::Align::Center,
                         set_hexpand: true,
-                        #[name(pag_current_entry)]
-                        gtk::Entry {
-                            set_editable: false,
-                            set_sensitive: false,
-                            set_margin_start: 5,
-                            set_width_chars: 10,
+                        #[name(cached_centered_controls)]
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
+                            set_halign: gtk::Align::Start,
+                            set_hexpand: true,
+                            #[name(pag_current_entry)]
+                            gtk::Entry {
+                                set_editable: false,
+                                set_sensitive: false,
+                                set_margin_start: 5,
+                                set_width_chars: 10,
+                            },
+                            gtk::Label {
+                                set_label: "of",
+                                set_margin_start: 5,
+                            },
+                            #[name(pag_last_entry)]
+                            gtk::Entry {
+                                set_editable: false,
+                                set_sensitive: false,
+                                set_margin_start: 5,
+                                set_width_chars: 10,
+                            },
                         },
-                        gtk::Label {
-                            set_label: "of",
-                            set_margin_start: 5,
-                        },
-                        #[name(pag_last_entry)]
-                        gtk::Entry {
-                            set_editable: false,
-                            set_sensitive: false,
-                            set_margin_start: 5,
-                            set_width_chars: 10,
-                        },
+
                     },
                     #[wrap(Some)]
                     set_end_widget = &gtk::Box {
@@ -379,6 +389,16 @@ impl Component for MessagesPageModel {
             sender_for_activate.input(MessagesPageMsg::OpenMessage(idx));
         });
 
+        messages_view.sorter().unwrap().connect_changed(move |sorter, change| {
+            let order = sorter.order();
+            let csorter: &ColumnViewSorter = sorter.downcast_ref().unwrap();
+            info!("sort order changed: {:?}:{:?}", change, order);
+            for i in 0..= csorter.n_sort_columns() {
+                let (cvc, sort) = csorter.nth_sort_column(i);
+                info!("column[{:?}]sort[{:?}]", cvc.map(|col| { col.title() }), sort);
+            }
+        });
+
         let widgets = view_output!();
 
         let buffer = widgets
@@ -407,11 +427,13 @@ impl Component for MessagesPageModel {
             MessagesPageMsg::ToggleMode(toggle) => {
                 self.mode = if toggle {
                     widgets.cached_controls.set_visible(true);
+                    widgets.cached_centered_controls.set_visible(true);
                     widgets.live_controls.set_visible(false);
                     MessagesMode::Cached { refresh: false }
                 } else {
                     widgets.live_controls.set_visible(true);
                     widgets.cached_controls.set_visible(false);
+                    widgets.cached_centered_controls.set_visible(false);
                     widgets.cache_timestamp.set_visible(false);
                     widgets.cache_timestamp.set_text("");
                     let cloned_topic = self.topic.clone().unwrap();
@@ -494,6 +516,10 @@ impl Component for MessagesPageModel {
                 widgets.cache_timestamp.set_label(&cache_ts);
                 widgets.cache_timestamp.set_visible(true);
                 widgets.cache_toggle.set_active(toggled);
+                widgets.pag_total_entry.set_text("");
+                widgets.pag_current_entry.set_text("");
+                widgets.pag_last_entry.set_text("");
+                self.messages_wrapper.clear();
                 self.page_size_combo.widget().queue_allocate();
                 sender.input(MessagesPageMsg::ToggleMode(toggled));
             }
@@ -502,7 +528,10 @@ impl Component for MessagesPageModel {
                 let mode = self.mode;
                 self.mode = match self.mode {
                     MessagesMode::Cached { refresh: _ } => MessagesMode::Cached { refresh: false },
-                    MessagesMode::Live => MessagesMode::Live,
+                    MessagesMode::Live => {
+                        self.messages_wrapper.clear();
+                        MessagesMode::Live
+                    }
                 };
                 let topic = self.topic.clone().unwrap();
                 let conn = self.connection.clone().unwrap();
@@ -639,22 +668,26 @@ impl Component for MessagesPageModel {
                 info!("cancelling get messages...");
                 self.token.cancel();
             }
+            MessagesPageMsg::UpdateMessage(message) => {
+                self.messages_wrapper.append(MessageListItem::new(message));
+            }
             MessagesPageMsg::UpdateMessages(response) => {
                 let total = response.total;
                 self.topic = response.topic.clone();
-                self.messages_wrapper.clear();
+                match self.mode {
+                    MessagesMode::Live => info!("no need to cleanup list on live mode"),
+                    MessagesMode::Cached { refresh: _ } => self.messages_wrapper.clear(),
+                }
                 self.headers_wrapper.clear();
                 widgets.value_source_view.buffer().set_text("");
-                if !response.messages.is_empty() {
-                    fill_pagination(
-                        response.page_operation,
-                        widgets,
-                        total,
-                        response.page_size,
-                        response.messages.first().unwrap(),
-                        response.messages.last().unwrap(),
-                    );
-                }
+                fill_pagination(
+                    response.page_operation,
+                    widgets,
+                    total,
+                    response.page_size,
+                    response.messages.first(),
+                    response.messages.last(),
+                );
                 self.messages_wrapper.extend_from_iter(
                     response
                         .messages
@@ -677,7 +710,7 @@ impl Component for MessagesPageModel {
                 widgets.cache_timestamp.set_label(&cache_ts);
                 widgets.cache_timestamp.set_visible(true);
                 STATUS_BROKER.send(StatusBarMsg::StopWithInfo {
-                    text: Some(format!("{} messages loaded!", response.messages.len())),
+                    text: Some(format!("{} messages loaded!", self.messages_wrapper.len())),
                 });
             }
             MessagesPageMsg::OpenMessage(message_idx) => {
@@ -733,8 +766,8 @@ fn fill_pagination(
     widgets: &mut MessagesPageModelWidgets,
     total: usize,
     page_size: u16,
-    first: &KrustMessage,
-    last: &KrustMessage,
+    first: Option<&KrustMessage>,
+    last: Option<&KrustMessage>,
 ) {
     let current_page: usize = widgets
         .pag_current_entry
@@ -752,22 +785,27 @@ fn fill_pagination(
         .set_text(current_page.to_string().as_str());
     let pages = ((total as f64) / (page_size as f64)).ceil() as usize;
     widgets.pag_last_entry.set_text(pages.to_string().as_str());
-    let first_offset = first.offset;
-    let first_partition = first.partition;
-    let last_offset = last.offset;
-    let last_partition = last.partition;
-    widgets
-        .first_offset
-        .set_text(first_offset.to_string().as_str());
-    widgets
-        .first_partition
-        .set_text(first_partition.to_string().as_str());
-    widgets
-        .last_offset
-        .set_text(last_offset.to_string().as_str());
-    widgets
-        .last_partition
-        .set_text(last_partition.to_string().as_str());
+    match (first, last) {
+        (Some(first), Some(last)) => {
+            let first_offset = first.offset;
+            let first_partition = first.partition;
+            let last_offset = last.offset;
+            let last_partition = last.partition;
+            widgets
+                .first_offset
+                .set_text(first_offset.to_string().as_str());
+            widgets
+                .first_partition
+                .set_text(first_partition.to_string().as_str());
+            widgets
+                .last_offset
+                .set_text(last_offset.to_string().as_str());
+            widgets
+                .last_partition
+                .set_text(last_partition.to_string().as_str());
+        }
+        (_, _) => (),
+    }
     debug!("fill pagination of current page {}", current_page);
     match current_page {
         1 => {

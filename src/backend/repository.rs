@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::string::ToString;
 use std::{fmt::Display, str::FromStr};
 
-use rusqlite::{named_params, params, Row};
+use rusqlite::{named_params, params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use strum::EnumString;
 
@@ -14,6 +14,7 @@ use crate::config::{
 use super::settings::Settings;
 
 #[allow(non_camel_case_types)]
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, PartialEq, Default, EnumString, strum::Display)]
 pub enum KrustConnectionSecurityType {
     #[default]
@@ -75,7 +76,6 @@ pub struct Repository {
     conn: rusqlite::Connection,
 }
 pub struct MessagesRepository {
-    conn: rusqlite::Connection,
     topic_name: String,
     path: PathBuf,
     database_name: String,
@@ -83,9 +83,17 @@ pub struct MessagesRepository {
 
 impl MessagesRepository {
     pub fn new(connection_id: usize, topic_name: &String) -> Self {
-        let path = PathBuf::from(Settings::read().unwrap().cache_dir);
+        let path = PathBuf::from(Settings::read().unwrap_or_default().cache_dir.as_str());
         let database_name = format!("topic_{}_{}", connection_id, topic_name);
-        let conn = database_connection_with_name(&path, &database_name)
+        Self {
+            topic_name: topic_name.clone(),
+            path: path.clone(),
+            database_name,
+        }
+    }
+
+    pub fn get_connection(&mut self) -> Connection {
+        let conn = database_connection_with_name(&self.path, &self.database_name)
             .expect("problem acquiring database connection");
         conn.execute_batch(
             "PRAGMA journal_mode = OFF;
@@ -95,16 +103,10 @@ impl MessagesRepository {
             PRAGMA temp_store = MEMORY;",
         )
         .unwrap();
-        Self {
-            conn,
-            topic_name: topic_name.clone(),
-            path: path.clone(),
-            database_name,
-        }
+        conn
     }
-
     pub fn init(&mut self) -> Result<(), ExternalError> {
-        self.conn.execute_batch(
+        self.get_connection().execute_batch(
             "CREATE TABLE IF NOT EXISTS kr_message (partition INTEGER, offset INTEGER, value TEXT, timestamp INTEGER, headers TEXT, PRIMARY KEY (partition, offset));"
         ).map_err(ExternalError::DatabaseError)
     }
@@ -113,8 +115,13 @@ impl MessagesRepository {
         destroy_database_with_name(self.path.clone(), &self.database_name)
     }
 
-    pub fn save_message(&mut self, message: &KrustMessage) -> Result<KrustMessage, ExternalError> {
-        let mut stmt_by_id = self.conn.prepare_cached(
+    pub fn save_message(
+        &mut self,
+        conn: &Connection,
+        message: &KrustMessage,
+    ) -> Result<KrustMessage, ExternalError> {
+        //let conn = self.get_connection();
+        let mut stmt_by_id = conn.prepare_cached(
             "INSERT INTO kr_message(partition, offset, value, timestamp, headers)
                     VALUES (:p, :o, :v, :t, :h)",
         )?;
@@ -133,10 +140,8 @@ impl MessagesRepository {
     }
 
     pub fn count_messages(&mut self) -> Result<usize, ExternalError> {
-        let mut stmt_by_id = self
-            .conn
-            .prepare_cached("SELECT COUNT(1) FROM kr_message")?;
-        
+        let conn = self.get_connection();
+        let mut stmt_by_id = conn.prepare_cached("SELECT COUNT(1) FROM kr_message")?;
 
         stmt_by_id
             .query_row(params![], move |row| row.get(0))
@@ -145,8 +150,9 @@ impl MessagesRepository {
 
     // TODO: find latest offsets/partitions
 
-    pub fn find_offsets(&mut self) -> Result<Vec<Partition>, ExternalError>{
-        let mut stmt_by_id = self.conn.prepare_cached(
+    pub fn find_offsets(&mut self) -> Result<Vec<Partition>, ExternalError> {
+        let conn = self.get_connection();
+        let mut stmt_by_id = conn.prepare_cached(
             "SELECT high.partition partition, offset_low, offset_high
                     FROM (SELECT partition, MAX(offset) offset_high
                                 from kr_message
@@ -174,7 +180,8 @@ impl MessagesRepository {
     }
 
     pub fn find_messages(&mut self, page_size: u16) -> Result<Vec<KrustMessage>, ExternalError> {
-        let mut stmt_by_id = self.conn.prepare_cached(
+        let conn = self.get_connection();
+        let mut stmt_by_id = conn.prepare_cached(
             "SELECT partition, offset, value, timestamp, headers
                    FROM kr_message
                ORDER BY offset, partition
@@ -212,7 +219,8 @@ impl MessagesRepository {
         last: (usize, usize),
     ) -> Result<Vec<KrustMessage>, ExternalError> {
         let (offset, partition) = last;
-        let mut stmt_by_id = self.conn.prepare_cached(
+        let conn = self.get_connection();
+        let mut stmt_by_id = conn.prepare_cached(
             "SELECT partition, offset, value, timestamp, headers
                    FROM kr_message
                   WHERE (offset, partition) > (:o, :p)
@@ -253,7 +261,8 @@ impl MessagesRepository {
         first: (usize, usize),
     ) -> Result<Vec<KrustMessage>, ExternalError> {
         let (offset, partition) = first;
-        let mut stmt_by_id = self.conn.prepare_cached(
+        let conn = self.get_connection();
+        let mut stmt_by_id = conn.prepare_cached(
             "SELECT partition, offset, value, timestamp, headers FROM (
                  SELECT partition, offset, value, timestamp, headers
                    FROM kr_message
@@ -432,7 +441,6 @@ impl Repository {
                 partitions: vec![],
             })
         };
-        
 
         stmt_by_id
             .execute(
@@ -452,7 +460,6 @@ impl Repository {
                   WHERE connection_id = :cid
                     AND name = :topic",
         )?;
-        
 
         stmt_by_id
             .execute(named_params! { ":cid": &conn_id, ":topic": &name.clone(),})

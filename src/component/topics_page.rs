@@ -1,16 +1,14 @@
-use gtk::prelude::*;
-use relm4::{
-    typed_view::column::{LabelColumn, TypedColumnView},
-    *,
-};
-use tracing::{debug, info};
-
 use crate::{
     backend::{
         kafka::KafkaBackend,
         repository::{KrustConnection, KrustTopic},
     },
     component::status_bar::{StatusBarMsg, STATUS_BROKER},
+};
+use gtk::prelude::*;
+use relm4::{
+    typed_view::column::{LabelColumn, TypedColumnView},
+    *,
 };
 
 // Table: start
@@ -172,19 +170,16 @@ impl Component for TopicsPageModel {
         sender: ComponentSender<Self>,
         _: &Self::Root,
     ) {
-        info!("received message: {:?}", msg);
-
         match msg {
             TopicsPageMsg::Search(term) => {
                 self.topics_wrapper.clear_filters();
                 let search_term = term.clone();
-                self.topics_wrapper.add_filter(move |item| {
-                    debug!("Searching topics {}", search_term);
-                    item.name.contains(search_term.as_str())
-                });
+                self.topics_wrapper
+                    .add_filter(move |item| item.name.contains(search_term.as_str()));
             }
             TopicsPageMsg::List(conn) => {
                 STATUS_BROKER.send(StatusBarMsg::Start);
+                self.topics_wrapper.clear();
                 self.current = Some(conn.clone());
                 sender.oneshot_command(async move {
                     let kafka = KafkaBackend::new(&conn);

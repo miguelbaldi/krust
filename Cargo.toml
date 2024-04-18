@@ -13,7 +13,7 @@ license-file = "LICENSE.md"
 [dependencies]
 anyhow = "1.0.51"
 gtk = { version = "0.8.1", package = "gtk4", features = ["v4_10"] }
-adw = { version = "0.6.0", package = "libadwaita", features = ["v1_2"] }
+adw = { version = "0.6.0", package = "libadwaita", features = ["v1_3"] }
 relm4 = { version = "0.8.1", features = ["libadwaita"] }
 relm4-components = "0.8.1"
 tokio = { version = "1.37.0", features = ["full"] }

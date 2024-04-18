@@ -12,6 +12,8 @@ use crate::{KRUST_APPLICATION, KRUST_ORGANIZATION, KRUST_QUALIFIER};
 #[derive(Error, Debug)]
 pub enum ExternalError {
     #[error(transparent)]
+    ParallelismError(#[from] tokio::task::JoinError),
+    #[error(transparent)]
     FileSystemError(#[from] std::io::Error),
     #[error(transparent)]
     DatabaseError(#[from] rusqlite::Error),

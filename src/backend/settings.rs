@@ -18,7 +18,7 @@ impl Settings {
     pub fn read() -> Result<Self, ExternalError> {
         let path = settings_path()?;
         serde_json::from_reader(File::open(path).map_err(|e| {
-            ExternalError::ConfigurationError(format!("unable to read state: {:?}", e))
+            ExternalError::ConfigurationError(format!("unable to open file: {:?}", e))
         })?)
         .map_err(|e| {
             ExternalError::ConfigurationError(format!("unable to read state: {:?}", e))
