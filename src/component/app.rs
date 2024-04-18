@@ -282,7 +282,6 @@ impl Component for AppModel {
             messages_page,
             settings_page,
         };
-
         widgets.load_window_size();
         ComponentParts { model, widgets }
     }

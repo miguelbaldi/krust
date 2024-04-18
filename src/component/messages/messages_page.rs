@@ -93,12 +93,14 @@ impl Component for MessagesPageModel {
                         set_orientation: gtk::Orientation::Horizontal,
                         set_halign: gtk::Align::Start,
                         set_hexpand: true,
+                        #[name(btn_get_messages)]
                         gtk::Button {
                             set_icon_name: "media-playback-start-symbolic",
                             connect_clicked[sender] => move |_| {
                                 sender.input(MessagesPageMsg::GetMessages);
                             },
                         },
+                        #[name(btn_stop_messages)]
                         gtk::Button {
                             set_icon_name: "media-playback-stop-symbolic",
                             set_margin_start: 5,
@@ -106,7 +108,7 @@ impl Component for MessagesPageModel {
                                 sender.input(MessagesPageMsg::StopGetMessages);
                             },
                         },
-                        #[name(cache_refresh)]
+                        #[name(btn_cache_refresh)]
                         gtk::Button {
                             set_icon_name: "media-playlist-repeat-symbolic",
                             set_margin_start: 5,
@@ -114,7 +116,7 @@ impl Component for MessagesPageModel {
                                 sender.input(MessagesPageMsg::RefreshMessages);
                             },
                         },
-                        #[name(cache_toggle)]
+                        #[name(btn_cache_toggle)]
                         gtk::ToggleButton {
                             set_margin_start: 5,
                             set_label: "Cache",
@@ -515,7 +517,7 @@ impl Component for MessagesPageModel {
                     .unwrap_or_default();
                 widgets.cache_timestamp.set_label(&cache_ts);
                 widgets.cache_timestamp.set_visible(true);
-                widgets.cache_toggle.set_active(toggled);
+                widgets.btn_cache_toggle.set_active(toggled);
                 widgets.pag_total_entry.set_text("");
                 widgets.pag_current_entry.set_text("");
                 widgets.pag_last_entry.set_text("");
@@ -525,6 +527,7 @@ impl Component for MessagesPageModel {
             }
             MessagesPageMsg::GetMessages => {
                 STATUS_BROKER.send(StatusBarMsg::Start);
+                on_loading(widgets, false);
                 let mode = self.mode;
                 self.mode = match self.mode {
                     MessagesMode::Cached { refresh: _ } => MessagesMode::Cached { refresh: false },
@@ -565,6 +568,7 @@ impl Component for MessagesPageModel {
             }
             MessagesPageMsg::GetNextMessages => {
                 STATUS_BROKER.send(StatusBarMsg::Start);
+                on_loading(widgets, false);
                 let mode = self.mode;
                 let topic = self.topic.clone().unwrap();
                 let conn = self.connection.clone().unwrap();
@@ -615,6 +619,7 @@ impl Component for MessagesPageModel {
             }
             MessagesPageMsg::GetPreviousMessages => {
                 STATUS_BROKER.send(StatusBarMsg::Start);
+                on_loading(widgets, false);
                 let mode = self.mode;
                 let topic = self.topic.clone().unwrap();
                 let conn = self.connection.clone().unwrap();
@@ -667,6 +672,10 @@ impl Component for MessagesPageModel {
             MessagesPageMsg::StopGetMessages => {
                 info!("cancelling get messages...");
                 self.token.cancel();
+                on_loading(widgets, true);
+                STATUS_BROKER.send(StatusBarMsg::StopWithInfo {
+                    text: Some("Operation cancelled!".to_string()),
+                });
             }
             MessagesPageMsg::UpdateMessage(message) => {
                 self.messages_wrapper.append(MessageListItem::new(message));
@@ -709,6 +718,7 @@ impl Component for MessagesPageModel {
                     .unwrap_or(String::default());
                 widgets.cache_timestamp.set_label(&cache_ts);
                 widgets.cache_timestamp.set_visible(true);
+                on_loading(widgets, true);
                 STATUS_BROKER.send(StatusBarMsg::StopWithInfo {
                     text: Some(format!("{} messages loaded!", self.messages_wrapper.len())),
                 });
@@ -759,6 +769,14 @@ impl Component for MessagesPageModel {
             CommandMsg::Data(messages) => sender.input(MessagesPageMsg::UpdateMessages(messages)),
         }
     }
+}
+
+fn on_loading(widgets: &mut MessagesPageModelWidgets, enabled: bool,) {
+    widgets.btn_next_page.set_sensitive(enabled);
+    widgets.btn_previous_page.set_sensitive(enabled);
+    widgets.btn_get_messages.set_sensitive(enabled);
+    widgets.btn_cache_refresh.set_sensitive(enabled);
+    widgets.btn_cache_toggle.set_sensitive(enabled);
 }
 
 fn fill_pagination(
