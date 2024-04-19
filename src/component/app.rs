@@ -13,7 +13,11 @@ use tracing::{error, info, warn};
 use crate::{
     backend::repository::{KrustConnection, KrustTopic, Repository},
     component::{
-        connection_list::KrustConnectionOutput, connection_page::{ConnectionPageModel, ConnectionPageMsg, ConnectionPageOutput}, settings_page::{SettingsPageModel, SettingsPageMsg, SettingsPageOutput}, status_bar::{StatusBarModel, STATUS_BROKER}, topics_page::{TopicsPageModel, TopicsPageMsg, TopicsPageOutput}
+        connection_list::KrustConnectionOutput,
+        connection_page::{ConnectionPageModel, ConnectionPageMsg, ConnectionPageOutput},
+        settings_page::{SettingsPageModel, SettingsPageMsg, SettingsPageOutput},
+        status_bar::{StatusBarModel, STATUS_BROKER},
+        topics_page::{TopicsPageModel, TopicsPageMsg, TopicsPageOutput},
     },
     config::State,
     modals::about::AboutDialog,
@@ -69,103 +73,121 @@ impl Component for AppModel {
     type CommandOutput = ();
 
     menu! {
-      primary_menu: {
-        section! {
-          "_Settings" => EditSettings,
-          "_Add connection" => AddConnection,
-          "_Keyboard" => ShortcutsAction,
-          "_About" => AboutAction,
+        primary_menu: {
+            section! {
+                "_Settings" => EditSettings,
+                "_Add connection" => AddConnection,
+                "_Keyboard" => ShortcutsAction,
+                "_About" => AboutAction,
+            }
         }
-      }
     }
 
     view! {
-      main_window = adw::ApplicationWindow::new(&main_application()) {
-        set_visible: true,
-        set_title: Some("KRust Kafka Client"),
-        set_icon_name: Some("krust-icon"),
-        gtk::Box {
-          set_orientation: gtk::Orientation::Vertical,
+        main_window = adw::ApplicationWindow::new(&main_application()) {
+            set_visible: true,
+            set_title: Some("KRust Kafka Client"),
+            set_icon_name: Some("krust-icon"),
+            gtk::Box {
+                set_orientation: gtk::Orientation::Vertical,
 
-          adw::HeaderBar {
-            pack_end = &gtk::MenuButton {
-              set_icon_name: "open-menu-symbolic",
-              set_menu_model: Some(&primary_menu),
-            }
-          },
-          #[name(main_paned)]
-          gtk::Paned {
-            set_orientation: gtk::Orientation::Horizontal,
-            set_resize_start_child: true,
-            #[wrap(Some)]
-            set_start_child = &gtk::ScrolledWindow {
-              set_min_content_width: 200,
-              set_hexpand: true,
-              set_vexpand: true,
-              set_propagate_natural_width: true,
-              #[wrap(Some)]
-              set_child = connections.widget() -> &gtk::ListBox {
-                set_selection_mode: gtk::SelectionMode::Single,
-                set_hexpand: true,
-                set_vexpand: true,
-                set_show_separators: true,
-                add_css_class: "rich-list",
-                connect_row_activated[sender] => move |list_box, row| {
-                  info!("clicked on connection: {:?} - {:?}", list_box, row.index());
-                  sender.input(AppMsg::ShowTopicsPageByIndex(row.index()));
+                adw::HeaderBar {
+                    pack_end = &gtk::MenuButton {
+                        set_icon_name: "open-menu-symbolic",
+                        set_menu_model: Some(&primary_menu),
+                    }
                 },
-              },
-            },
-            #[wrap(Some)]
-            set_end_child = &gtk::ScrolledWindow {
-              set_hexpand: true,
-              set_vexpand: true,
-              #[wrap(Some)]
-              set_child = &gtk::Box {
-                #[name(main_stack)]
-                gtk::Stack {
-                  add_child = &gtk::Box {
-                    set_halign: gtk::Align::Center,
-                    set_orientation: gtk::Orientation::Vertical,
-                    #[name="support_logo"]
-                    gtk::Picture {
-                        set_vexpand: true,
+                #[name(main_paned)]
+                gtk::Paned {
+                    set_orientation: gtk::Orientation::Horizontal,
+                    set_resize_start_child: true,
+                    set_wide_handle: true,
+                    #[wrap(Some)]
+                    set_start_child = &gtk::ScrolledWindow {
+                        set_min_content_width: 200,
                         set_hexpand: true,
-                        set_margin_top: 48,
-                        set_margin_bottom: 48,
+                        set_vexpand: true,
+                        set_propagate_natural_width: true,
+                        #[wrap(Some)]
+                        set_child = &gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            gtk::StackSwitcher {
+                                set_overflow: gtk::Overflow::Hidden,
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_stack: Some(&main_stack),
+                                set_hexpand: false,
+                                set_vexpand: false,
+                                set_valign: gtk::Align::Baseline,
+                                set_halign: gtk::Align::Center,
+                            },
+                            gtk::ScrolledWindow {
+                                connections.widget() -> &gtk::ListBox {
+                                    set_selection_mode: gtk::SelectionMode::Single,
+                                    set_hexpand: true,
+                                    set_vexpand: true,
+                                    set_show_separators: true,
+                                    add_css_class: "rich-list",
+                                    connect_row_activated[sender] => move |list_box, row| {
+                                        info!("clicked on connection: {:?} - {:?}", list_box, row.index());
+                                        sender.input(AppMsg::ShowTopicsPageByIndex(row.index()));
+                                    },
+                                },
+                            },
+                        },
                     },
-                  } -> {
-                    set_title: "Home",
-                    set_name: "Home",
-                  },
-                  add_child = connection_page.widget() -> &gtk::Grid {} -> {
-                    set_name: "Connection"
-                  },
-                  add_child = topics_page.widget() -> &gtk::Box {} -> {
-                    set_name: "Topics"
-                  },
-                  add_child = messages_page.widget() -> &gtk::Box {} -> {
-                    set_name: "Messages"
-                  },
-                  add_child = settings_page.widget() -> &gtk::Grid {} -> {
-                    set_name: "Settings"
-                  },
+                    #[wrap(Some)]
+                    set_end_child = &gtk::ScrolledWindow {
+                        set_hexpand: true,
+                        set_vexpand: true,
+                        #[wrap(Some)]
+                        set_child = &gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            #[name(main_stack)]
+                            gtk::Stack {
+                                add_child = &gtk::Box {
+                                    set_halign: gtk::Align::Center,
+                                    set_orientation: gtk::Orientation::Vertical,
+                                    #[name="support_logo"]
+                                    gtk::Picture {
+                                        set_vexpand: true,
+                                        set_hexpand: true,
+                                        set_margin_top: 48,
+                                        set_margin_bottom: 48,
+                                    },
+                                } -> {
+                                    set_title: "Home",
+                                    set_name: "Home",
+                                },
+                                add_child = connection_page.widget() -> &gtk::Grid {} -> {
+                                    set_name: "Connection",
+                                },
+                                add_child = topics_page.widget() -> &gtk::Box {} -> {
+                                    set_name: "Topics",
+                                    set_title: "Topics",
+                                },
+                                add_child = messages_page.widget() -> &gtk::Box {} -> {
+                                    set_name: "Messages",
+                                    set_title: "Messages",
+                                },
+                                add_child = settings_page.widget() -> &gtk::Grid {} -> {
+                                    set_name: "Settings",
+                                },
+                            },
+                        },
+                    },
+                },
+                gtk::Box {
+                    add_css_class: "status-bar",
+                    status_bar.widget() -> &gtk::CenterBox {}
                 }
-              }
             },
-          },
-          gtk::Box {
-            add_css_class: "status-bar",
-            status_bar.widget() -> &gtk::CenterBox {}
-          }
-        },
 
-        connect_close_request[sender] => move |_this| {
-          sender.input(AppMsg::CloseRequest);
-          gtk::glib::Propagation::Stop
-        },
+            connect_close_request[sender] => move |_this| {
+                sender.input(AppMsg::CloseRequest);
+                gtk::glib::Propagation::Stop
+            },
 
-      }
+        }
     }
 
     fn init(_params: (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
@@ -203,9 +225,8 @@ impl Component for AppModel {
                 }
             });
 
-        let messages_page: Controller<MessagesPageModel> = MessagesPageModel::builder()
-            .launch(())
-            .detach();
+        let messages_page: Controller<MessagesPageModel> =
+            MessagesPageModel::builder().launch(()).detach();
 
         let settings_page: Controller<SettingsPageModel> = SettingsPageModel::builder()
             .launch(())
@@ -411,7 +432,11 @@ impl AppModelWidgets {
     fn save_window_size(&self) -> Result<(), glib::BoolError> {
         let (width, height) = self.main_window.default_size();
         let is_maximized = self.main_window.is_maximized();
-        let separator = self.main_paned.position();
+        let separator = if self.main_paned.position() < 405 {
+            405
+        } else {
+            self.main_paned.position()
+        };
         let new_state = State {
             width,
             height,
