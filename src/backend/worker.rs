@@ -92,7 +92,7 @@ impl MessagesWorker {
                 _ = token.cancelled() => {
                     info!("request {:?} cancelled", &req);
                     // The token was cancelled
-                    Ok(MessagesResponse { total: 0, messages: Vec::new(), topic: None, page_operation: req.page_operation, page_size: req.page_size})
+                    Ok(MessagesResponse { total: 0, messages: Vec::new(), topic: Some(req.topic), page_operation: req.page_operation, page_size: req.page_size})
                 }
                 messages = self.get_messages_by_mode(&req) => {
                     messages
@@ -202,11 +202,10 @@ impl MessagesWorker {
         let topic = &request.topic.name;
         // Run async background task
         let total = kafka.topic_message_count(topic).await;
-        let duration = kafka.list_messages_for_topic(topic, total).await?;
-        info!("get_messages_live {:?}", duration);
+        let messages = kafka.list_messages_for_topic(topic, total, ).await?;
         Ok(MessagesResponse {
             total,
-            messages: vec![],
+            messages: messages,
             topic: Some(request.topic.clone()),
             page_operation: request.page_operation,
             page_size: request.page_size,

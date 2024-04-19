@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 use tracing::{debug, info, trace, warn};
 
 use crate::backend::repository::{KrustConnection, KrustHeader, KrustMessage, Partition};
-use crate::component::messages::messages_page::{MessagesPageMsg, LIVE_MESSAGES_BROKER};
 use crate::config::ExternalError;
 
 use super::repository::{KrustConnectionSecurityType, KrustTopic, MessagesRepository};
@@ -271,7 +270,7 @@ impl KafkaBackend {
         &self,
         topic: &String,
         total: usize,
-    ) -> Result<Duration, ExternalError> {
+    ) -> Result<Vec<KrustMessage>, ExternalError> {
         let start_mark = Instant::now();
         info!("starting listing messages for topic {}", topic);
         let topic_name = topic.as_str();
@@ -284,7 +283,7 @@ impl KafkaBackend {
         consumer
             .subscribe(&[topic_name])
             .expect("Can't subscribe to specified topics");
-
+        let mut messages: Vec<KrustMessage> = Vec::with_capacity(total);
         while counter < total {
             match consumer.recv().await {
                 Err(e) => warn!("Kafka error: {}", e),
@@ -323,7 +322,7 @@ impl KafkaBackend {
                         headers,
                     };
 
-                    LIVE_MESSAGES_BROKER.send(MessagesPageMsg::UpdateMessage(message));
+                    messages.push(message);
                     counter += 1;
                 }
             };
@@ -333,6 +332,6 @@ impl KafkaBackend {
             "finished listing messages for topic {}, duration: {:?}",
             topic, duration
         );
-        Ok(duration)
+        Ok(messages)
     }
 }

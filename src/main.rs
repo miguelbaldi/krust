@@ -31,7 +31,7 @@ fn main() -> Result<(), ()> {
     gtk::init().expect("should initialize GTK");
     let filter = filter::Targets::new()
         // Enable the `INFO` level for anything in `my_crate`
-        .with_target("relm4", Level::WARN)
+        .with_target("relm4", Level::INFO)
         // Enable the `DEBUG` level for a specific module.
         .with_target("krust", Level::DEBUG);
     tracing_subscriber::registry()

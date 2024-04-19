@@ -13,12 +13,7 @@ use tracing::{error, info, warn};
 use crate::{
     backend::repository::{KrustConnection, KrustTopic, Repository},
     component::{
-        connection_list::KrustConnectionOutput,
-        connection_page::{ConnectionPageModel, ConnectionPageMsg, ConnectionPageOutput},
-        messages::messages_page::LIVE_MESSAGES_BROKER,
-        settings_page::{SettingsPageModel, SettingsPageMsg, SettingsPageOutput},
-        status_bar::{StatusBarModel, STATUS_BROKER},
-        topics_page::{TopicsPageModel, TopicsPageMsg, TopicsPageOutput},
+        connection_list::KrustConnectionOutput, connection_page::{ConnectionPageModel, ConnectionPageMsg, ConnectionPageOutput}, settings_page::{SettingsPageModel, SettingsPageMsg, SettingsPageOutput}, status_bar::{StatusBarModel, STATUS_BROKER}, topics_page::{TopicsPageModel, TopicsPageMsg, TopicsPageOutput}
     },
     config::State,
     modals::about::AboutDialog,
@@ -149,7 +144,7 @@ impl Component for AppModel {
                   add_child = topics_page.widget() -> &gtk::Box {} -> {
                     set_name: "Topics"
                   },
-                  add_child = messages_page.widget() -> &gtk::Paned {} -> {
+                  add_child = messages_page.widget() -> &gtk::Box {} -> {
                     set_name: "Messages"
                   },
                   add_child = settings_page.widget() -> &gtk::Grid {} -> {
@@ -209,7 +204,7 @@ impl Component for AppModel {
             });
 
         let messages_page: Controller<MessagesPageModel> = MessagesPageModel::builder()
-            .launch_with_broker((), &LIVE_MESSAGES_BROKER)
+            .launch(())
             .detach();
 
         let settings_page: Controller<SettingsPageModel> = SettingsPageModel::builder()
