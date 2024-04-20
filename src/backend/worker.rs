@@ -33,6 +33,7 @@ pub struct MessagesRequest {
     pub page_operation: PageOp,
     pub page_size: u16,
     pub offset_partition: (usize, usize),
+    pub search: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +43,7 @@ pub struct MessagesResponse {
     pub total: usize,
     pub messages: Vec<KrustMessage>,
     pub topic: Option<KrustTopic>,
+    pub search: Option<String>,
 }
 
 pub struct MessagesCleanupRequest {
@@ -92,7 +94,7 @@ impl MessagesWorker {
                 _ = token.cancelled() => {
                     info!("request {:?} cancelled", &req);
                     // The token was cancelled
-                    Ok(MessagesResponse { total: 0, messages: Vec::new(), topic: Some(req.topic), page_operation: req.page_operation, page_size: req.page_size})
+                    Ok(MessagesResponse { total: 0, messages: Vec::new(), topic: Some(req.topic), page_operation: req.page_operation, page_size: req.page_size, search: req.search})
                 }
                 messages = self.get_messages_by_mode(&req) => {
                     messages
@@ -142,7 +144,7 @@ impl MessagesWorker {
         let total = match request.topic.cached {
             Some(_) => {
                 if refresh {
-                    let cached_total = mrepo.count_messages().unwrap_or_default();
+                    let cached_total = mrepo.count_messages(None).unwrap_or_default();
                     let total = kafka.topic_message_count(&topic.name).await - cached_total;
                     let partitions = mrepo.find_offsets().ok();
                     kafka
@@ -156,7 +158,7 @@ impl MessagesWorker {
                         .await
                         .unwrap();
                 }
-                mrepo.count_messages().unwrap_or_default()
+                mrepo.count_messages(request.search.clone()).unwrap_or_default()
             }
             None => {
                 let total = kafka.topic_message_count(&topic.name).await;
@@ -171,18 +173,29 @@ impl MessagesWorker {
                     )
                     .await
                     .unwrap();
+                let total = if request.search.clone().is_some() {
+                    mrepo.count_messages(request.search.clone()).unwrap_or_default()
+                } else {
+                    total
+                };
                 total
             }
         };
         let messages = match request.page_operation {
             PageOp::Next => match request.offset_partition {
-                (0, 0) => mrepo.find_messages(request.page_size).unwrap(),
+                (0, 0) => mrepo
+                    .find_messages(request.clone().page_size, request.clone().search)
+                    .unwrap(),
                 offset_partition => mrepo
-                    .find_next_messages(request.page_size, offset_partition)
+                    .find_next_messages(request.page_size, offset_partition, request.clone().search)
                     .unwrap(),
             },
             PageOp::Prev => mrepo
-                .find_prev_messages(request.page_size, request.offset_partition)
+                .find_prev_messages(
+                    request.page_size,
+                    request.offset_partition,
+                    request.clone().search,
+                )
                 .unwrap(),
         };
         Ok(MessagesResponse {
@@ -191,6 +204,7 @@ impl MessagesWorker {
             topic: Some(topic),
             page_operation: request.page_operation,
             page_size: request.page_size,
+            search: request.search.clone(),
         })
     }
 
@@ -202,13 +216,14 @@ impl MessagesWorker {
         let topic = &request.topic.name;
         // Run async background task
         let total = kafka.topic_message_count(topic).await;
-        let messages = kafka.list_messages_for_topic(topic, total, ).await?;
+        let messages = kafka.list_messages_for_topic(topic, total).await?;
         Ok(MessagesResponse {
             total,
             messages: messages,
             topic: Some(request.topic.clone()),
             page_operation: request.page_operation,
             page_size: request.page_size,
+            search: request.search.clone(),
         })
     }
 }

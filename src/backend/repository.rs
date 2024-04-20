@@ -123,15 +123,15 @@ impl MessagesRepository {
         //let conn = self.get_connection();
         let mut stmt_by_id = conn.prepare_cached(
             "INSERT INTO kr_message(partition, offset, value, timestamp, headers)
-                    VALUES (:p, :o, :v, :t, :h)",
+            VALUES (:p, :o, :v, :t, :h)",
         )?;
         let headers =
             ron::ser::to_string::<Vec<KrustHeader>>(message.headers.as_ref()).unwrap_or_default();
         let maybe_message = stmt_by_id
-            .execute(
-                named_params! { ":p": message.partition, ":o": message.offset, ":v": message.value, ":t": message.timestamp, ":h": headers},
-            )
-            .map_err(ExternalError::DatabaseError);
+        .execute(
+            named_params! { ":p": message.partition, ":o": message.offset, ":v": message.value, ":t": message.timestamp, ":h": headers},
+        )
+        .map_err(ExternalError::DatabaseError);
 
         match maybe_message {
             Ok(_) => Ok(message.to_owned()),
@@ -139,12 +139,25 @@ impl MessagesRepository {
         }
     }
 
-    pub fn count_messages(&mut self) -> Result<usize, ExternalError> {
+    pub fn count_messages(&mut self, search: Option<String>) -> Result<usize, ExternalError> {
         let conn = self.get_connection();
-        let mut stmt_by_id = conn.prepare_cached("SELECT COUNT(1) FROM kr_message")?;
-
-        stmt_by_id
-            .query_row(params![], move |row| row.get(0))
+        let mut stmt_count = match search {
+            Some(_) => {
+                conn.prepare_cached("SELECT COUNT(1) FROM kr_message WHERE value LIKE :search")?
+            }
+            None => conn.prepare_cached("SELECT COUNT(1) FROM kr_message")?,
+        };
+        let params_with_search =
+            named_params! { ":search": format!("%{}%", search.clone().unwrap_or_default()) };
+        stmt_count
+            .query_row(
+                if search.is_some() {
+                    params_with_search
+                } else {
+                    named_params![]
+                },
+                move |row| row.get(0),
+            )
             .map_err(ExternalError::DatabaseError)
     }
 
@@ -154,12 +167,12 @@ impl MessagesRepository {
         let conn = self.get_connection();
         let mut stmt_by_id = conn.prepare_cached(
             "SELECT high.partition partition, offset_low, offset_high
-                    FROM (SELECT partition, MAX(offset) offset_high
-                                from kr_message
-                                GROUP BY partition) high
-                    JOIN (SELECT partition, MIN(offset) offset_low
-                                from kr_message
-                                GROUP BY partition) low ON high.partition = low.partition",
+            FROM (SELECT partition, MAX(offset) offset_high
+            from kr_message
+            GROUP BY partition) high
+            JOIN (SELECT partition, MIN(offset) offset_low
+            from kr_message
+            GROUP BY partition) low ON high.partition = low.partition",
         )?;
 
         let row_to_model = move |row: &Row<'_>| {
@@ -179,14 +192,27 @@ impl MessagesRepository {
         Ok(messages)
     }
 
-    pub fn find_messages(&mut self, page_size: u16) -> Result<Vec<KrustMessage>, ExternalError> {
+    pub fn find_messages(
+        &mut self,
+        page_size: u16,
+        search: Option<String>,
+    ) -> Result<Vec<KrustMessage>, ExternalError> {
         let conn = self.get_connection();
-        let mut stmt_by_id = conn.prepare_cached(
-            "SELECT partition, offset, value, timestamp, headers
-                   FROM kr_message
-               ORDER BY offset, partition
-               LIMIT :ps",
-        )?;
+        let mut stmt_query = match search {
+            Some(_) => conn.prepare_cached(
+                "SELECT partition, offset, value, timestamp, headers
+                FROM kr_message
+                WHERE value LIKE :search
+                ORDER BY offset, partition
+                LIMIT :ps",
+            )?,
+            None => conn.prepare_cached(
+                "SELECT partition, offset, value, timestamp, headers
+                FROM kr_message
+                ORDER BY offset, partition
+                LIMIT :ps",
+            )?,
+        };
         let string_to_headers = move |sheaders: String| {
             let headers: Result<Vec<KrustHeader>, rusqlite::Error> = ron::from_str(&sheaders)
                 .map_err(|e| rusqlite::Error::InvalidColumnName(e.to_string()));
@@ -203,8 +229,17 @@ impl MessagesRepository {
                 topic: topic_name.clone(),
             })
         };
-        let rows = stmt_by_id
-            .query_map(named_params! {":ps": page_size}, row_to_model)
+        let params_with_search = named_params! { ":search": format!("%{}%", search.clone().unwrap_or_default()), ":ps": page_size };
+        let params = named_params! { ":ps": page_size, };
+        let rows = stmt_query
+            .query_map(
+                if search.is_some() {
+                    params_with_search
+                } else {
+                    params
+                },
+                row_to_model,
+            )
             .map_err(ExternalError::DatabaseError)?;
         let mut messages = Vec::new();
         for row in rows {
@@ -217,16 +252,27 @@ impl MessagesRepository {
         &mut self,
         page_size: u16,
         last: (usize, usize),
+        search: Option<String>,
     ) -> Result<Vec<KrustMessage>, ExternalError> {
         let (offset, partition) = last;
         let conn = self.get_connection();
-        let mut stmt_by_id = conn.prepare_cached(
-            "SELECT partition, offset, value, timestamp, headers
-                   FROM kr_message
-                  WHERE (offset, partition) > (:o, :p)
-               ORDER BY offset, partition
-                  LIMIT :ps",
-        )?;
+        let mut stmt_query = match search {
+            Some(_) => conn.prepare_cached(
+                "SELECT partition, offset, value, timestamp, headers
+                FROM kr_message
+                WHERE (offset, partition) > (:o, :p)
+                AND value LIKE :search
+                ORDER BY offset, partition
+                LIMIT :ps",
+            )?,
+            None => conn.prepare_cached(
+                "SELECT partition, offset, value, timestamp, headers
+                FROM kr_message
+                WHERE (offset, partition) > (:o, :p)
+                ORDER BY offset, partition
+                LIMIT :ps",
+            )?,
+        };
         let string_to_headers = move |sheaders: String| {
             let headers: Result<Vec<KrustHeader>, rusqlite::Error> = ron::from_str(&sheaders)
                 .map_err(|e| rusqlite::Error::InvalidColumnName(e.to_string()));
@@ -243,9 +289,15 @@ impl MessagesRepository {
                 topic: topic_name.clone(),
             })
         };
-        let rows = stmt_by_id
+        let params_with_search = named_params! {":ps": page_size, ":o": offset, ":p": partition, ":search": format!("%{}%", search.clone().unwrap_or_default())};
+        let params = named_params! {":ps": page_size, ":o": offset, ":p": partition,};
+        let rows = stmt_query
             .query_map(
-                named_params! {":ps": page_size, ":o": offset, ":p": partition},
+                if search.is_some() {
+                    params_with_search
+                } else {
+                    params
+                },
                 row_to_model,
             )
             .map_err(ExternalError::DatabaseError)?;
@@ -259,18 +311,31 @@ impl MessagesRepository {
         &mut self,
         page_size: u16,
         first: (usize, usize),
+        search: Option<String>,
     ) -> Result<Vec<KrustMessage>, ExternalError> {
         let (offset, partition) = first;
         let conn = self.get_connection();
-        let mut stmt_by_id = conn.prepare_cached(
-            "SELECT partition, offset, value, timestamp, headers FROM (
-                 SELECT partition, offset, value, timestamp, headers
-                   FROM kr_message
-                  WHERE (offset, partition) < (:o, :p)
-               ORDER BY offset DESC, partition DESC
-                  LIMIT :ps
-            ) ORDER BY offset ASC, partition ASC",
-        )?;
+        let mut stmt_query = match search {
+            Some(_) => conn.prepare_cached(
+                "SELECT partition, offset, value, timestamp, headers FROM (
+                    SELECT partition, offset, value, timestamp, headers
+                    FROM kr_message
+                    WHERE (offset, partition) < (:o, :p)
+                    AND value LIKE :search
+                    ORDER BY offset DESC, partition DESC
+                    LIMIT :ps
+                ) ORDER BY offset ASC, partition ASC",
+            )?,
+            None => conn.prepare_cached(
+                "SELECT partition, offset, value, timestamp, headers FROM (
+                    SELECT partition, offset, value, timestamp, headers
+                    FROM kr_message
+                    WHERE (offset, partition) < (:o, :p)
+                    ORDER BY offset DESC, partition DESC
+                    LIMIT :ps
+                ) ORDER BY offset ASC, partition ASC",
+            )?,
+        };
         let string_to_headers = move |sheaders: String| {
             let headers: Result<Vec<KrustHeader>, rusqlite::Error> = ron::from_str(&sheaders)
                 .map_err(|e| rusqlite::Error::InvalidColumnName(e.to_string()));
@@ -287,9 +352,15 @@ impl MessagesRepository {
                 topic: topic_name.clone(),
             })
         };
-        let rows = stmt_by_id
+        let params_with_search = named_params! {":ps": page_size, ":o": offset, ":p": partition, ":search": format!("%{}%", search.clone().unwrap_or_default()) };
+        let params = named_params! {":ps": page_size, ":o": offset, ":p": partition };
+        let rows = stmt_query
             .query_map(
-                named_params! {":ps": page_size, ":o": offset, ":p": partition},
+                if search.is_some() {
+                    params_with_search
+                } else {
+                    params
+                },
                 row_to_model,
             )
             .map_err(ExternalError::DatabaseError)?;
@@ -315,9 +386,9 @@ impl Repository {
 
     pub fn init(&mut self) -> Result<(), ExternalError> {
         self.conn.execute_batch("
-    CREATE TABLE IF NOT EXISTS kr_connection(id INTEGER PRIMARY KEY, name TEXT UNIQUE, brokersList TEXT, securityType TEXT, saslMechanism TEXT, saslUsername TEXT, saslPassword TEXT);
-    CREATE TABLE IF NOT EXISTS kr_topic(connection_id INTEGER, name TEXT, cached INTEGER, PRIMARY KEY (connection_id, name), FOREIGN KEY (connection_id) REFERENCES kr_connection(id));
-    ").map_err(ExternalError::DatabaseError)
+        CREATE TABLE IF NOT EXISTS kr_connection(id INTEGER PRIMARY KEY, name TEXT UNIQUE, brokersList TEXT, securityType TEXT, saslMechanism TEXT, saslUsername TEXT, saslPassword TEXT);
+        CREATE TABLE IF NOT EXISTS kr_topic(connection_id INTEGER, name TEXT, cached INTEGER, PRIMARY KEY (connection_id, name), FOREIGN KEY (connection_id) REFERENCES kr_connection(id));
+        ").map_err(ExternalError::DatabaseError)
     }
 
     pub fn list_all_connections(&mut self) -> Result<Vec<KrustConnection>, ExternalError> {
@@ -385,9 +456,9 @@ impl Repository {
             Ok(konn_to_update) => {
                 let mut up_stmt = self.conn.prepare_cached("UPDATE kr_connection SET name = :name, brokersList = :brokers, securityType = :security, saslMechanism = :sasl, saslUsername = :sasl_u, saslPassword = :sasl_p WHERE id = :id")?;
                 up_stmt
-        .execute(named_params! { ":id": &konn_to_update.id.unwrap(), ":name": &name, ":brokers": &brokers, ":security": security.to_string(), ":sasl": &sasl, ":sasl_u": &sasl_username, ":sasl_p": &sasl_password })
-        .map_err(ExternalError::DatabaseError)
-        .map( |_| {KrustConnection { id: konn_to_update.id, name, brokers_list: brokers, security_type: security, sasl_mechanism: sasl, sasl_username, sasl_password }})
+                .execute(named_params! { ":id": &konn_to_update.id.unwrap(), ":name": &name, ":brokers": &brokers, ":security": security.to_string(), ":sasl": &sasl, ":sasl_u": &sasl_username, ":sasl_p": &sasl_password })
+                .map_err(ExternalError::DatabaseError)
+                .map( |_| {KrustConnection { id: konn_to_update.id, name, brokers_list: brokers, security_type: security, sasl_mechanism: sasl, sasl_username, sasl_password }})
             }
             Err(_) => {
                 let mut ins_stmt = self.conn.prepare_cached("INSERT INTO kr_connection (id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword) VALUES (?, ?, ?, ?, ?, ?, ?)  RETURNING id")?;
@@ -429,9 +500,9 @@ impl Repository {
         let cached = topic.cached;
         let mut stmt_by_id = self.conn.prepare_cached(
             "INSERT INTO kr_topic(connection_id, name, cached)
-                    VALUES (:cid, :topic, :cached)
-                    ON CONFLICT(connection_id, name)
-                        DO UPDATE SET cached=excluded.cached",
+            VALUES (:cid, :topic, :cached)
+            ON CONFLICT(connection_id, name)
+            DO UPDATE SET cached=excluded.cached",
         )?;
         let row_to_model = move |_| {
             Ok(KrustTopic {
@@ -457,8 +528,8 @@ impl Repository {
         let name = topic.name.clone();
         let mut stmt_by_id = self.conn.prepare_cached(
             "DELETE FROM kr_topic
-                  WHERE connection_id = :cid
-                    AND name = :topic",
+            WHERE connection_id = :cid
+            AND name = :topic",
         )?;
 
         stmt_by_id
@@ -468,7 +539,7 @@ impl Repository {
 
     pub fn find_topic(&mut self, conn_id: usize, topic_name: &String) -> Option<KrustTopic> {
         let stmt = self.conn
-            .prepare_cached("SELECT connection_id, name, cached FROM kr_topic WHERE connection_id = :cid AND name = :topic");
+        .prepare_cached("SELECT connection_id, name, cached FROM kr_topic WHERE connection_id = :cid AND name = :topic");
         stmt.ok()?
             .query_row(
                 named_params! {":cid": &conn_id, ":topic": &topic_name },

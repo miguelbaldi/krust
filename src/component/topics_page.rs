@@ -118,7 +118,7 @@ impl Component for TopicsPageModel {
             gtk::SearchEntry {
               connect_search_changed[sender] => move |entry| {
                 sender.clone().input(TopicsPageMsg::Search(entry.text().to_string()));
-              }
+              },
             },
           },
         },

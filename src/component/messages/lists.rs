@@ -113,7 +113,7 @@ impl MessageListItem {
         Self {
             offset: value.offset,
             partition: value.partition,
-            key: "".to_string(),
+            key: String::default(),
             value: value.value,
             timestamp: value.timestamp,
             headers: value.headers,

@@ -3,7 +3,9 @@
 use chrono::{TimeZone, Utc};
 use chrono_tz::America;
 use gtk::{gdk::DisplayManager, ColumnViewSorter};
-use relm4::{factory::{DynamicIndex, FactoryComponent}, typed_view::column::TypedColumnView, *};
+use relm4::{
+    actions::{RelmAction, RelmActionGroup}, factory::{DynamicIndex, FactoryComponent}, typed_view::column::TypedColumnView, *
+};
 use relm4_components::simple_combo_box::SimpleComboBox;
 use sourceview::prelude::*;
 use sourceview5 as sourceview;
@@ -29,6 +31,10 @@ use crate::{
     Repository, DATE_TIME_FORMAT,
 };
 
+// page actions
+relm4::new_action_group!(pub MessagesPageActionGroup, "messages_page");
+relm4::new_stateless_action!(pub MessagesSearchAction, MessagesPageActionGroup, "search");
+
 #[derive(Debug)]
 pub struct MessagesTabModel {
     token: CancellationToken,
@@ -41,7 +47,7 @@ pub struct MessagesTabModel {
     page_size: u16,
 }
 
-pub struct  MessagesTabInit {
+pub struct MessagesTabInit {
     pub topic: KrustTopic,
     pub connection: KrustConnection,
 }
@@ -56,6 +62,8 @@ pub enum MessagesTabMsg {
     RefreshMessages,
     UpdateMessages(MessagesResponse),
     OpenMessage(u32),
+    SearchMessages,
+    LiveSearchMessages(String),
     Selection(u32),
     PageSizeChanged(usize),
     ToggleMode(bool),
@@ -66,7 +74,7 @@ pub enum CommandMsg {
     Data(MessagesResponse),
 }
 
-const AVAILABLE_PAGE_SIZES: [u16; 4] = [50, 100, 500, 1000];
+const AVAILABLE_PAGE_SIZES: [u16; 6] = [50, 100, 500, 1000, 2000, 5000];
 
 #[relm4::factory(pub)]
 impl FactoryComponent for MessagesTabModel {
@@ -138,17 +146,26 @@ impl FactoryComponent for MessagesTabModel {
                     #[wrap(Some)]
                     set_end_widget = &gtk::Box {
                         set_orientation: gtk::Orientation::Horizontal,
-                        set_halign: gtk::Align::Fill,
+                        set_halign: gtk::Align::End,
                         set_hexpand: true,
-                        #[name(topics_search_entry)]
+                        #[name(messages_search_entry)]
                         gtk::SearchEntry {
-                            set_hexpand: true,
+                            set_hexpand: false,
                             set_halign: gtk::Align::Fill,
-
+                            connect_search_changed[sender] => move |entry| {
+                                sender.clone().input(MessagesTabMsg::LiveSearchMessages(entry.text().to_string()));
+                            },
+                            connect_activate[sender] => move |_entry| {
+                                sender.input(MessagesTabMsg::SearchMessages);
+                            },
                         },
+                        #[name(messages_search_btn)]
                         gtk::Button {
                             set_icon_name: "edit-find-symbolic",
                             set_margin_start: 5,
+                            connect_clicked[sender] => move |_| {
+                                sender.input(MessagesTabMsg::SearchMessages);
+                            },
                         },
                     },
                 },
@@ -351,6 +368,7 @@ impl FactoryComponent for MessagesTabModel {
         messages_wrapper.append_column::<MessageOfssetColumn>();
         messages_wrapper.append_column::<MessageValueColumn>();
         messages_wrapper.append_column::<MessageTimestampColumn>();
+
         // Initialize the headers ListView wrapper
         let mut headers_wrapper = TypedColumnView::<HeaderListItem, gtk::NoSelection>::new();
         headers_wrapper.append_column::<HeaderNameColumn>();
@@ -377,27 +395,37 @@ impl FactoryComponent for MessagesTabModel {
         let _headers_view = &model.headers_wrapper.view;
         let sender_for_selection = sender.clone();
         messages_view
-        .model()
-        .unwrap()
-        .connect_selection_changed(move |selection_model, _, _| {
-            sender_for_selection.input(MessagesTabMsg::Selection(selection_model.n_items()));
-        });
+            .model()
+            .unwrap()
+            .connect_selection_changed(move |selection_model, _, _| {
+                sender_for_selection.input(MessagesTabMsg::Selection(selection_model.n_items()));
+            });
         let sender_for_activate = sender.clone();
         messages_view.connect_activate(move |_view, idx| {
             sender_for_activate.input(MessagesTabMsg::OpenMessage(idx));
         });
 
-        messages_view.sorter().unwrap().connect_changed(move |sorter, change| {
-            let order = sorter.order();
-            let csorter: &ColumnViewSorter = sorter.downcast_ref().unwrap();
-            info!("sort order changed: {:?}:{:?}", change, order);
-            for i in 0..= csorter.n_sort_columns() {
-                let (cvc, sort) = csorter.nth_sort_column(i);
-                info!("column[{:?}]sort[{:?}]", cvc.map(|col| { col.title() }), sort);
-            }
-        });
+        messages_view
+            .sorter()
+            .unwrap()
+            .connect_changed(move |sorter, change| {
+                let order = sorter.order();
+                let csorter: &ColumnViewSorter = sorter.downcast_ref().unwrap();
+                info!("sort order changed: {:?}:{:?}", change, order);
+                for i in 0..=csorter.n_sort_columns() {
+                    let (cvc, sort) = csorter.nth_sort_column(i);
+                    info!(
+                        "column[{:?}]sort[{:?}]",
+                        cvc.map(|col| { col.title() }),
+                        sort
+                    );
+                }
+            });
 
-        sender.input(MessagesTabMsg::Open(model.connection.clone().unwrap(), model.topic.clone().unwrap()));
+        sender.input(MessagesTabMsg::Open(
+            model.connection.clone().unwrap(),
+            model.topic.clone().unwrap(),
+        ));
         model
     }
 
@@ -413,6 +441,20 @@ impl FactoryComponent for MessagesTabModel {
         }
         let language = sourceview::LanguageManager::default().language("json");
         buffer.set_language(language.as_ref());
+
+        // Shortcuts
+        let mut actions = RelmActionGroup::<MessagesPageActionGroup>::new();
+
+        let messages_search_entry = widgets.messages_search_entry.clone();
+        let search_action = {
+            let messages_search_btn = widgets.messages_search_btn.clone();
+            RelmAction::<MessagesSearchAction>::new_stateless(move |_| {
+                messages_search_btn.emit_clicked();
+            })
+        };
+        actions.add_action(search_action);
+        actions.register_for_widget(messages_search_entry);
+
     }
 
     fn update_with_view(
@@ -521,6 +563,20 @@ impl FactoryComponent for MessagesTabModel {
                 self.page_size_combo.widget().queue_allocate();
                 sender.input(MessagesTabMsg::ToggleMode(toggled));
             }
+            MessagesTabMsg::LiveSearchMessages(term) => {
+                match self.mode.clone() {
+                    MessagesMode::Live => {
+                        self.messages_wrapper.clear_filters();
+                        let search_term = term.clone();
+                        self.messages_wrapper
+                            .add_filter(move |item| item.value.contains(search_term.as_str()));
+                    }
+                    MessagesMode::Cached { refresh: _ } => (),
+                };
+            }
+            MessagesTabMsg::SearchMessages => {
+                sender.input(MessagesTabMsg::GetMessages);
+            }
             MessagesTabMsg::GetMessages => {
                 STATUS_BROKER.send(StatusBarMsg::Start);
                 on_loading(widgets, false);
@@ -539,6 +595,7 @@ impl FactoryComponent for MessagesTabModel {
                 }
                 let page_size = self.page_size;
                 let token = self.token.clone();
+                let search = get_search_term(widgets);
                 widgets.pag_current_entry.set_text("0");
                 sender.oneshot_command(async move {
                     // Run async background task
@@ -553,6 +610,7 @@ impl FactoryComponent for MessagesTabModel {
                                 page_operation: PageOp::Next,
                                 page_size,
                                 offset_partition: (0, 0),
+                                search: search,
                             },
                         )
                         .await
@@ -586,6 +644,7 @@ impl FactoryComponent for MessagesTabModel {
                         .parse::<usize>()
                         .unwrap(),
                 );
+                let search = get_search_term(widgets);
                 let token = self.token.clone();
                 info!(
                     "getting next messages [page_size={}, last_offset={}, last_partition={}]",
@@ -604,6 +663,7 @@ impl FactoryComponent for MessagesTabModel {
                                 page_operation: PageOp::Next,
                                 page_size,
                                 offset_partition: (offset, partition),
+                                search: search,
                             },
                         )
                         .await
@@ -638,6 +698,7 @@ impl FactoryComponent for MessagesTabModel {
                         .unwrap(),
                 );
                 let token = self.token.clone();
+                let search = get_search_term(widgets);
                 sender.oneshot_command(async move {
                     // Run async background task
                     let messages_worker = MessagesWorker::new();
@@ -651,6 +712,7 @@ impl FactoryComponent for MessagesTabModel {
                                 page_operation: PageOp::Prev,
                                 page_size,
                                 offset_partition: (offset, partition),
+                                search: search,
                             },
                         )
                         .await
@@ -752,18 +814,25 @@ impl FactoryComponent for MessagesTabModel {
         self.update_view(widgets, sender);
     }
 
-    fn update_cmd(
-        &mut self,
-        message: Self::CommandOutput,
-        sender: FactorySender<Self>,
-    ) {
+    fn update_cmd(&mut self, message: Self::CommandOutput, sender: FactorySender<Self>) {
         match message {
             CommandMsg::Data(messages) => sender.input(MessagesTabMsg::UpdateMessages(messages)),
         }
     }
 }
 
-fn on_loading(widgets: &mut MessagesTabModelWidgets, enabled: bool,) {
+fn get_search_term(widgets: &mut MessagesTabModelWidgets) -> Option<String> {
+    let search: Option<String> = widgets.messages_search_entry.text().try_into().ok();
+    let search = search.clone().unwrap_or_default();
+    let search_txt = search.trim();
+    if search_txt.is_empty() {
+        None
+    } else {
+        Some(search_txt.to_string())
+    }
+}
+
+fn on_loading(widgets: &mut MessagesTabModelWidgets, enabled: bool) {
     widgets.btn_get_messages.set_sensitive(enabled);
     widgets.btn_cache_refresh.set_sensitive(enabled);
     widgets.btn_cache_toggle.set_sensitive(enabled);

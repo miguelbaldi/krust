@@ -2,6 +2,7 @@ use gtk::gdk;
 //#![windows_subsystem = "windows"]
 use gtk::prelude::ApplicationExt;
 use gtk::gio;
+use krust::MessagesSearchAction;
 use tracing::*;
 use tracing_subscriber::filter;
 use tracing_subscriber::prelude::*;
@@ -31,7 +32,7 @@ fn main() -> Result<(), ()> {
     gtk::init().expect("should initialize GTK");
     let filter = filter::Targets::new()
         // Enable the `INFO` level for anything in `my_crate`
-        .with_target("relm4", Level::INFO)
+        .with_target("relm4", Level::WARN)
         // Enable the `DEBUG` level for a specific module.
         .with_target("krust", Level::DEBUG);
     tracing_subscriber::registry()
@@ -63,6 +64,8 @@ fn main() -> Result<(), ()> {
 
     app.set_accelerators_for_action::<QuitAction>(&["<Control>q"]);
 
+    setup_shortcuts(&app);
+
     let app = RelmApp::from_app(app);
     app.set_global_css(include_str!("styles.css"));
     info!("running application");
@@ -70,4 +73,9 @@ fn main() -> Result<(), ()> {
     info!("main loop exited");
 
     Ok(())
+}
+
+pub fn setup_shortcuts(_app: &gtk::Application) {
+    info!("registering application shortcuts...");
+    // app.set_accelerators_for_action::<MessagesSearchAction>(&["<Enter>"]);
 }
