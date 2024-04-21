@@ -255,7 +255,7 @@ impl KafkaBackend {
                     let offset = match fetch {
                         KafkaFetch::Newest => p
                             .offset_high
-                            .map(|oh| Offset::from_raw(oh + 1))
+                            .map(|oh| Offset::from_raw(oh))
                             .unwrap_or(Offset::Beginning),
                         KafkaFetch::Oldest => Offset::Beginning,
                     };
@@ -313,8 +313,10 @@ impl KafkaBackend {
                         value: payload.to_string(),
                         headers,
                     };
-                    trace!("saving message {}", &message.offset);
-                    mrepo.save_message(&conn, &message)?;
+                    match mrepo.save_message(&conn, &message) {
+                        Ok(_) => trace!("message with offset {} saved", &message.offset),
+                        Err(err) => warn!("unable to save message with offset {}: {}", &message.offset, err.to_string()),
+                    };
                     counter += 1;
                 }
             };
