@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::Utc;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
@@ -7,7 +9,7 @@ use crate::{config::ExternalError, Repository};
 
 use super::{
     kafka::{KafkaBackend, KafkaFetch},
-    repository::{KrustConnection, KrustMessage, KrustTopic, MessagesRepository},
+    repository::{KrustConnection, KrustMessage, KrustTopic, MessagesRepository, Partition},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, strum::EnumString, strum::Display)]
@@ -113,6 +115,9 @@ impl MessagesWorker {
             MessagesMode::Cached { refresh: _ } => self.get_messages_cached(request).await,
         }
     }
+
+
+
     async fn get_messages_cached(
         self,
         request: &MessagesRequest,
@@ -134,6 +139,7 @@ impl MessagesWorker {
             name: request.topic.name.clone(),
             cached,
             partitions: vec![],
+            total: None,
         };
         let topic = repo.save_topic(
             topic.connection_id.expect("should have connection id"),
@@ -144,37 +150,46 @@ impl MessagesWorker {
         let total = match request.topic.cached {
             Some(_) => {
                 if refresh {
-                    let cached_total = mrepo.count_messages(None).unwrap_or_default();
-                    let total = kafka.topic_message_count(&topic.name).await - cached_total;
                     let partitions = mrepo.find_offsets().ok();
+                    let topic = kafka.topic_message_count(&topic.name, partitions.clone()).await;
+                    let partitions = topic.partitions.clone();
+                    let total = topic.total.unwrap_or_default();
                     kafka
-                        .cache_messages_for_topic(
-                            topic_name,
-                            total,
-                            &mut mrepo,
-                            partitions,
-                            Some(KafkaFetch::Newest),
-                        )
-                        .await
-                        .unwrap();
-                }
-                mrepo.count_messages(request.search.clone()).unwrap_or_default()
-            }
-            None => {
-                let total = kafka.topic_message_count(&topic.name).await;
-                mrepo.init().unwrap();
-                kafka
                     .cache_messages_for_topic(
                         topic_name,
                         total,
                         &mut mrepo,
-                        None,
-                        Some(KafkaFetch::Oldest),
+                        Some(partitions),
+                        Some(KafkaFetch::Newest),
                     )
                     .await
                     .unwrap();
+                }
+                mrepo
+                .count_messages(request.search.clone())
+                .unwrap_or_default()
+            }
+            None => {
+                let total = kafka
+                .topic_message_count(&topic.name, None)
+                .await
+                .total
+                .unwrap_or_default();
+                mrepo.init().unwrap();
+                kafka
+                .cache_messages_for_topic(
+                    topic_name,
+                    total,
+                    &mut mrepo,
+                    None,
+                    Some(KafkaFetch::Oldest),
+                )
+                .await
+                .unwrap();
                 let total = if request.search.clone().is_some() {
-                    mrepo.count_messages(request.search.clone()).unwrap_or_default()
+                    mrepo
+                    .count_messages(request.search.clone())
+                    .unwrap_or_default()
                 } else {
                     total
                 };
@@ -184,19 +199,19 @@ impl MessagesWorker {
         let messages = match request.page_operation {
             PageOp::Next => match request.offset_partition {
                 (0, 0) => mrepo
-                    .find_messages(request.clone().page_size, request.clone().search)
-                    .unwrap(),
+                .find_messages(request.clone().page_size, request.clone().search)
+                .unwrap(),
                 offset_partition => mrepo
-                    .find_next_messages(request.page_size, offset_partition, request.clone().search)
-                    .unwrap(),
+                .find_next_messages(request.page_size, offset_partition, request.clone().search)
+                .unwrap(),
             },
             PageOp::Prev => mrepo
-                .find_prev_messages(
-                    request.page_size,
-                    request.offset_partition,
-                    request.clone().search,
-                )
-                .unwrap(),
+            .find_prev_messages(
+                request.page_size,
+                request.offset_partition,
+                request.clone().search,
+            )
+            .unwrap(),
         };
         Ok(MessagesResponse {
             total,
@@ -215,7 +230,11 @@ impl MessagesWorker {
         let kafka = KafkaBackend::new(&request.connection);
         let topic = &request.topic.name;
         // Run async background task
-        let total = kafka.topic_message_count(topic).await;
+        let total = kafka
+        .topic_message_count(topic, None)
+        .await
+        .total
+        .unwrap_or_default();
         let messages = kafka.list_messages_for_topic(topic, total).await?;
         Ok(MessagesResponse {
             total,

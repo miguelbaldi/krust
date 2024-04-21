@@ -49,6 +49,7 @@ pub struct KrustTopic {
     pub name: String,
     pub cached: Option<i64>,
     pub partitions: Vec<Partition>,
+    pub total: Option<usize>,
 }
 
 impl Display for KrustTopic {
@@ -510,6 +511,7 @@ impl Repository {
                 name: topic.name.clone(),
                 cached,
                 partitions: vec![],
+                total: None,
             })
         };
 
@@ -549,6 +551,7 @@ impl Repository {
                         name: row.get(1)?,
                         cached: row.get(2)?,
                         partitions: vec![],
+                        total: None,
                     })
                 },
             )

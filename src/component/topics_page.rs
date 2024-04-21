@@ -197,6 +197,7 @@ impl Component for TopicsPageModel {
                     name: item.borrow().name.clone(),
                     cached: None,
                     partitions: vec![],
+                    total: None,
                 };
                 sender
                     .output(TopicsPageOutput::OpenMessagesPage(

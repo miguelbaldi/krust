@@ -7,6 +7,8 @@ use rdkafka::message::Headers;
 use rdkafka::topic_partition_list::TopicPartitionList;
 use rdkafka::{Message, Offset};
 
+use std::borrow::Borrow;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, trace, warn};
 
@@ -134,13 +136,14 @@ impl KafkaBackend {
                 name: topic.name().to_string(),
                 cached: None,
                 partitions,
+                total: None,
             });
         }
         topics
     }
 
-    pub async fn topic_message_count(&self, topic: &String) -> usize {
-        info!("couting messages for topic {}", topic);
+    pub async fn fetch_partitions(&self, topic: &String) -> Vec<Partition> {
+        info!("fetching partitions from topic {}", topic);
         let context = CustomContext;
         let consumer: LoggingConsumer = self.consumer(context).expect("Consumer creation failed");
 
@@ -150,7 +153,7 @@ impl KafkaBackend {
             .fetch_metadata(Some(topic.as_str()), TIMEOUT)
             .expect("Failed to fetch metadata");
 
-        let mut message_count: usize = 0;
+        let mut partitions = vec![];
         match metadata.topics().first() {
             Some(t) => {
                 for partition in t.partitions() {
@@ -163,13 +166,69 @@ impl KafkaBackend {
                         high,
                         high - low
                     );
-                    message_count += usize::try_from(high).unwrap() - usize::try_from(low).unwrap();
+                    let part = Partition {
+                        id: partition.id(),
+                        offset_low: Some(low),
+                        offset_high: Some(high),
+                    };
+                    partitions.push(part);
                 }
             }
             None => warn!(""),
         }
+        partitions
+    }
+
+    pub async fn topic_message_count(
+        &self,
+        topic: &String,
+        current_partitions: Option<Vec<Partition>>,
+    ) -> KrustTopic {
+        info!("couting messages for topic {}", topic);
+
+        let mut message_count: usize = 0;
+        let partitions = &self.fetch_partitions(topic).await;
+        let mut result = current_partitions.clone().unwrap_or_default();
+        let cpartitions = &current_partitions.unwrap_or_default().clone();
+
+        let part_map = cpartitions
+            .into_iter()
+            .map(|p| (p.id, p.clone()))
+            .collect::<HashMap<_, _>>();
+
+        for p in partitions {
+            if !cpartitions.is_empty() {
+                let low = match part_map.get(&p.id) {
+                    Some(part) => part.offset_high.unwrap_or(p.offset_low.unwrap()),
+                    None => {
+                        result.push(Partition {
+                            id: p.id,
+                            offset_low: p.offset_low,
+                            offset_high: None,
+                        });
+                        p.offset_low.unwrap()
+                    }
+                };
+                message_count += usize::try_from(p.offset_high.unwrap_or_default()).unwrap()
+                    - usize::try_from(low).unwrap();
+            } else {
+                message_count += usize::try_from(p.offset_high.unwrap_or_default()).unwrap()
+                    - usize::try_from(p.offset_low.unwrap_or_default()).unwrap();
+            };
+        }
+
         info!("topic {} has {} messages", topic, message_count);
-        message_count
+        KrustTopic {
+            connection_id: None,
+            name: topic.clone(),
+            cached: None,
+            partitions: if !cpartitions.is_empty() {
+                result
+            } else {
+                partitions.clone()
+            },
+            total: Some(message_count),
+        }
     }
     pub async fn cache_messages_for_topic(
         &self,
@@ -194,10 +253,10 @@ impl KafkaBackend {
                 let mut partition_list = TopicPartitionList::with_capacity(partitions.capacity());
                 for p in partitions.iter() {
                     let offset = match fetch {
-                        KafkaFetch::Newest => {
-                            let latest_offset = p.offset_high.unwrap_or_default() + 1;
-                            Offset::from_raw(latest_offset)
-                        }
+                        KafkaFetch::Newest => p
+                            .offset_high
+                            .map(|oh| Offset::from_raw(oh + 1))
+                            .unwrap_or(Offset::Beginning),
                         KafkaFetch::Oldest => Offset::Beginning,
                     };
                     partition_list
@@ -230,7 +289,7 @@ impl KafkaBackend {
                         }
                     };
                     trace!("key: '{:?}', payload: '{}', topic: {}, partition: {}, offset: {}, timestamp: {:?}",
-                        m.key(), payload, m.topic(), m.partition(), m.offset(), m.timestamp());
+                    m.key(), payload, m.topic(), m.partition(), m.offset(), m.timestamp());
                     let headers = if let Some(headers) = m.headers() {
                         let mut header_list: Vec<KrustHeader> = vec![];
                         for header in headers.iter() {
@@ -254,6 +313,7 @@ impl KafkaBackend {
                         value: payload.to_string(),
                         headers,
                     };
+                    trace!("saving message {}", &message.offset);
                     mrepo.save_message(&conn, &message)?;
                     counter += 1;
                 }
@@ -297,7 +357,7 @@ impl KafkaBackend {
                         }
                     };
                     trace!("key: '{:?}', payload: '{}', topic: {}, partition: {}, offset: {}, timestamp: {:?}",
-          m.key(), payload, m.topic(), m.partition(), m.offset(), m.timestamp());
+                    m.key(), payload, m.topic(), m.partition(), m.offset(), m.timestamp());
                     let headers = if let Some(headers) = m.headers() {
                         let mut header_list: Vec<KrustHeader> = vec![];
                         for header in headers.iter() {

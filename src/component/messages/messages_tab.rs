@@ -482,6 +482,7 @@ impl FactoryComponent for MessagesTabModel {
                         connection_id: cloned_topic.connection_id,
                         cached: None,
                         partitions: vec![],
+                        total: None,
                     };
                     let conn = self.connection.clone().unwrap();
                     MessagesWorker::new().cleanup_messages(&MessagesCleanupRequest {
