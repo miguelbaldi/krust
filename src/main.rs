@@ -2,7 +2,6 @@ use gtk::gdk;
 //#![windows_subsystem = "windows"]
 use gtk::prelude::ApplicationExt;
 use gtk::gio;
-use krust::MessagesSearchAction;
 use tracing::*;
 use tracing_subscriber::filter;
 use tracing_subscriber::prelude::*;
@@ -34,7 +33,7 @@ fn main() -> Result<(), ()> {
         // Enable the `INFO` level for anything in `my_crate`
         .with_target("relm4", Level::WARN)
         // Enable the `DEBUG` level for a specific module.
-        .with_target("krust", Level::DEBUG);
+        .with_target("krust", Level::TRACE);
     tracing_subscriber::registry()
         .with(HierarchicalLayer::new(2))
         .with(EnvFilter::from_default_env())

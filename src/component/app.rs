@@ -45,7 +45,6 @@ pub enum AppMsg {
     SavedSettings,
 }
 
-#[derive(Debug)]
 pub struct AppModel {
     //state: State,
     _status_bar: Controller<StatusBarModel>,

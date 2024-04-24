@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use chrono::Utc;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
@@ -9,7 +7,7 @@ use crate::{config::ExternalError, Repository};
 
 use super::{
     kafka::{KafkaBackend, KafkaFetch},
-    repository::{KrustConnection, KrustMessage, KrustTopic, MessagesRepository, Partition},
+    repository::{KrustConnection, KrustMessage, KrustTopic, MessagesRepository},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, strum::EnumString, strum::Display)]
@@ -36,6 +34,8 @@ pub struct MessagesRequest {
     pub page_size: u16,
     pub offset_partition: (usize, usize),
     pub search: Option<String>,
+    pub fetch: KafkaFetch,
+    pub max_messages: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -116,8 +116,6 @@ impl MessagesWorker {
         }
     }
 
-
-
     async fn get_messages_cached(
         self,
         request: &MessagesRequest,
@@ -151,7 +149,9 @@ impl MessagesWorker {
             Some(_) => {
                 if refresh {
                     let partitions = mrepo.find_offsets().ok();
-                    let topic = kafka.topic_message_count(&topic.name, partitions.clone()).await;
+                    let topic = kafka
+                    .topic_message_count(&topic.name, None, None, partitions.clone())
+                    .await;
                     let partitions = topic.partitions.clone();
                     let total = topic.total.unwrap_or_default();
                     kafka
@@ -171,7 +171,7 @@ impl MessagesWorker {
             }
             None => {
                 let total = kafka
-                .topic_message_count(&topic.name, None)
+                .topic_message_count(&topic.name, None, None, None)
                 .await
                 .total
                 .unwrap_or_default();
@@ -230,14 +230,15 @@ impl MessagesWorker {
         let kafka = KafkaBackend::new(&request.connection);
         let topic = &request.topic.name;
         // Run async background task
-        let total = kafka
-        .topic_message_count(topic, None)
-        .await
-        .total
-        .unwrap_or_default();
-        let messages = kafka.list_messages_for_topic(topic, total).await?;
+        let messages = kafka
+        .list_messages_for_topic(
+            topic,
+            Some(request.fetch.clone()),
+            Some(request.max_messages),
+        )
+        .await?;
         Ok(MessagesResponse {
-            total,
+            total: messages.len(),
             messages: messages,
             topic: Some(request.topic.clone()),
             page_operation: request.page_operation,

@@ -2,9 +2,16 @@
 // See: https://gitlab.gnome.org/GNOME/gtk/-/issues/5644
 use chrono::{TimeZone, Utc};
 use chrono_tz::America;
-use gtk::{gdk::DisplayManager, ColumnViewSorter};
+use csv::StringRecord;
+use gtk::{
+    gdk::{DisplayManager, Rectangle},
+    ColumnViewSorter,
+};
 use relm4::{
-    actions::{RelmAction, RelmActionGroup}, factory::{DynamicIndex, FactoryComponent}, typed_view::column::TypedColumnView, *
+    actions::{RelmAction, RelmActionGroup},
+    factory::{DynamicIndex, FactoryComponent},
+    typed_view::column::TypedColumnView,
+    *,
 };
 use relm4_components::simple_combo_box::SimpleComboBox;
 use sourceview::prelude::*;
@@ -14,6 +21,7 @@ use tracing::{debug, info, trace};
 
 use crate::{
     backend::{
+        kafka::KafkaFetch,
         repository::{KrustConnection, KrustMessage, KrustTopic},
         worker::{
             MessagesCleanupRequest, MessagesMode, MessagesRequest, MessagesResponse,
@@ -31,11 +39,17 @@ use crate::{
     Repository, DATE_TIME_FORMAT,
 };
 
+use super::lists::MessageKeyColumn;
+
 // page actions
 relm4::new_action_group!(pub MessagesPageActionGroup, "messages_page");
 relm4::new_stateless_action!(pub MessagesSearchAction, MessagesPageActionGroup, "search");
 
-#[derive(Debug)]
+relm4::new_action_group!(pub(super) MessagesListActionGroup, "messages-list");
+relm4::new_stateless_action!(pub(super) CopyMessagesAsCsv, MessagesListActionGroup, "copy-messages-as-csv");
+relm4::new_stateless_action!(pub(super) CopyMessagesValue, MessagesListActionGroup, "copy-messages-value");
+relm4::new_stateless_action!(pub(super) CopyMessagesKey, MessagesListActionGroup, "copy-messages-key");
+
 pub struct MessagesTabModel {
     token: CancellationToken,
     pub topic: Option<KrustTopic>,
@@ -45,11 +59,21 @@ pub struct MessagesTabModel {
     headers_wrapper: TypedColumnView<HeaderListItem, gtk::NoSelection>,
     page_size_combo: Controller<SimpleComboBox<u16>>,
     page_size: u16,
+    fetch_type_combo: Controller<SimpleComboBox<KafkaFetch>>,
+    fetch_type: KafkaFetch,
+    max_messages: f64,
+    messages_menu_popover: gtk::PopoverMenu,
 }
 
 pub struct MessagesTabInit {
     pub topic: KrustTopic,
     pub connection: KrustConnection,
+}
+#[derive(Debug)]
+pub enum Copy {
+    AllAsCsv,
+    Value,
+    Key,
 }
 
 #[derive(Debug)]
@@ -66,7 +90,10 @@ pub enum MessagesTabMsg {
     LiveSearchMessages(String),
     Selection(u32),
     PageSizeChanged(usize),
+    FetchTypeChanged(usize),
     ToggleMode(bool),
+    DigitsOnly(f64),
+    CopyMessages(Copy),
 }
 
 #[derive(Debug)]
@@ -84,6 +111,16 @@ impl FactoryComponent for MessagesTabModel {
     type CommandOutput = CommandMsg;
     type ParentWidget = adw::TabView;
 
+    menu! {
+        messages_menu: {
+            section! {
+                "_Copy as CSV" => CopyMessagesAsCsv,
+                "_Copy value" => CopyMessagesValue,
+                "_Copy key" => CopyMessagesKey,
+            }
+        }
+    }
+
     view! {
         #[root]
         gtk::Paned {
@@ -94,6 +131,9 @@ impl FactoryComponent for MessagesTabModel {
                 set_orientation: gtk::Orientation::Vertical,
                 set_hexpand: true,
                 set_vexpand: true,
+                container_add = &self.messages_menu_popover.clone() {
+                    set_menu_model: Some(&messages_menu),
+                },
                 gtk::CenterBox {
                     set_orientation: gtk::Orientation::Horizontal,
                     set_halign: gtk::Align::Fill,
@@ -159,13 +199,8 @@ impl FactoryComponent for MessagesTabModel {
                                 sender.input(MessagesTabMsg::SearchMessages);
                             },
                         },
-                        #[name(messages_search_btn)]
-                        gtk::Button {
-                            set_icon_name: "edit-find-symbolic",
+                        self.fetch_type_combo.widget() -> &gtk::ComboBoxText {
                             set_margin_start: 5,
-                            connect_clicked[sender] => move |_| {
-                                sender.input(MessagesTabMsg::SearchMessages);
-                            },
                         },
                     },
                 },
@@ -180,7 +215,7 @@ impl FactoryComponent for MessagesTabModel {
                         set_show_column_separators: true,
                         set_single_click_activate: false,
                         set_enable_rubberband: true,
-                    }
+                    },
                 },
             },
             #[wrap(Some)]
@@ -345,19 +380,27 @@ impl FactoryComponent for MessagesTabModel {
                             set_halign: gtk::Align::Start,
                             set_hexpand: true,
                             gtk::Label {
-                                set_label: "Max messages",
+                                set_label: "Max messages (per partition)",
                                 set_margin_start: 5,
                             },
                             #[name(max_messages)]
-                            gtk::Entry {
+                            gtk::SpinButton {
                                 set_margin_start: 5,
                                 set_width_chars: 10,
+                                set_numeric: true,
+                                set_increments: (1000.0, 10000.0),
+                                set_range: (1.0, 100000.0),
+                                set_value: self.max_messages,
+                                set_digits: 0,
+                                connect_value_changed[sender] => move |sbtn| {
+                                    sender.input(MessagesTabMsg::DigitsOnly(sbtn.value()));
+                                },
                             },
                         },
                     },
                 },
             },
-        }
+        },
 
     }
 
@@ -366,6 +409,7 @@ impl FactoryComponent for MessagesTabModel {
         let mut messages_wrapper = TypedColumnView::<MessageListItem, gtk::MultiSelection>::new();
         messages_wrapper.append_column::<MessagePartitionColumn>();
         messages_wrapper.append_column::<MessageOfssetColumn>();
+        messages_wrapper.append_column::<MessageKeyColumn>();
         messages_wrapper.append_column::<MessageValueColumn>();
         messages_wrapper.append_column::<MessageTimestampColumn>();
 
@@ -381,6 +425,37 @@ impl FactoryComponent for MessagesTabModel {
             })
             .forward(sender.input_sender(), MessagesTabMsg::PageSizeChanged);
         page_size_combo.widget().queue_allocate();
+        let fetch_type_combo = SimpleComboBox::builder()
+            .launch(SimpleComboBox {
+                variants: KafkaFetch::VALUES.to_vec(),
+                active_index: Some(default_idx),
+            })
+            .forward(sender.input_sender(), MessagesTabMsg::FetchTypeChanged);
+
+        let messages_popover_menu = gtk::PopoverMenu::builder().build();
+        let mut messages_actions = RelmActionGroup::<MessagesListActionGroup>::new();
+        let messages_menu_sender = sender.input_sender().clone();
+        let menu_copy_all_csv_action = RelmAction::<CopyMessagesAsCsv>::new_stateless(move |_| {
+            messages_menu_sender
+                .send(MessagesTabMsg::CopyMessages(Copy::AllAsCsv))
+                .unwrap();
+        });
+        let messages_menu_sender = sender.input_sender().clone();
+        let menu_copy_value_action = RelmAction::<CopyMessagesValue>::new_stateless(move |_| {
+            messages_menu_sender
+                .send(MessagesTabMsg::CopyMessages(Copy::Value))
+                .unwrap();
+        });
+        let messages_menu_sender = sender.input_sender().clone();
+        let menu_copy_key_action = RelmAction::<CopyMessagesKey>::new_stateless(move |_| {
+            messages_menu_sender
+                .send(MessagesTabMsg::CopyMessages(Copy::Key))
+                .unwrap();
+        });
+        messages_actions.add_action(menu_copy_all_csv_action);
+        messages_actions.add_action(menu_copy_value_action);
+        messages_actions.add_action(menu_copy_key_action);
+        messages_actions.register_for_widget(&messages_popover_menu);
         let model = MessagesTabModel {
             token: CancellationToken::new(),
             mode: MessagesMode::Live,
@@ -390,15 +465,19 @@ impl FactoryComponent for MessagesTabModel {
             headers_wrapper,
             page_size_combo,
             page_size: AVAILABLE_PAGE_SIZES[0],
+            fetch_type_combo,
+            fetch_type: KafkaFetch::default(),
+            max_messages: 1000.0,
+            messages_menu_popover: messages_popover_menu,
         };
         let messages_view = &model.messages_wrapper.view;
         let _headers_view = &model.headers_wrapper.view;
-        let sender_for_selection = sender.clone();
+        let _sender_for_selection = sender.clone();
         messages_view
             .model()
             .unwrap()
-            .connect_selection_changed(move |selection_model, _, _| {
-                sender_for_selection.input(MessagesTabMsg::Selection(selection_model.n_items()));
+            .connect_selection_changed(move |_selection_model, _, _| {
+                //sender_for_selection.input(MessagesTabMsg::Selection(selection_model.n_items()));
             });
         let sender_for_activate = sender.clone();
         messages_view.connect_activate(move |_view, idx| {
@@ -441,20 +520,38 @@ impl FactoryComponent for MessagesTabModel {
         }
         let language = sourceview::LanguageManager::default().language("json");
         buffer.set_language(language.as_ref());
-
+        widgets.max_messages.set_increments(1000.0, 10000.0);
         // Shortcuts
-        let mut actions = RelmActionGroup::<MessagesPageActionGroup>::new();
+        // let mut actions = RelmActionGroup::<MessagesPageActionGroup>::new();
 
-        let messages_search_entry = widgets.messages_search_entry.clone();
-        let search_action = {
-            let messages_search_btn = widgets.messages_search_btn.clone();
-            RelmAction::<MessagesSearchAction>::new_stateless(move |_| {
-                messages_search_btn.emit_clicked();
-            })
-        };
-        actions.add_action(search_action);
-        actions.register_for_widget(messages_search_entry);
+        // let messages_search_entry = widgets.messages_search_entry.clone();
+        // let search_action = {
+        //     let messages_search_btn = widgets.messages_search_btn.clone();
+        //     RelmAction::<MessagesSearchAction>::new_stateless(move |_| {
+        //         messages_search_btn.emit_clicked();
+        //     })
+        // };
+        // actions.add_action(search_action);
+        // actions.register_for_widget(messages_search_entry);
 
+        //self.messages_menu_popover.set_menu_model(widgets.menu)
+        // Create a click gesture
+        let gesture = gtk::GestureClick::new();
+
+        // Set the gestures button to the right mouse button (=3)
+        gesture.set_button(gtk::gdk::ffi::GDK_BUTTON_SECONDARY as u32);
+
+        // Assign your handler to an event of the gesture (e.g. the `pressed` event)
+        let messages_menu = self.messages_menu_popover.clone();
+        gesture.connect_pressed(move |gesture, _n, x, y| {
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            let x = x as i32;
+            let y = y as i32;
+            info!("ColumnView: Right mouse button pressed [x={},y={}]", x, y);
+            messages_menu.set_pointing_to(Some(&Rectangle::new(x, y + 55, 1, 1)));
+            messages_menu.popup();
+        });
+        self.messages_wrapper.view.add_controller(gesture);
     }
 
     fn update_with_view(
@@ -464,6 +561,10 @@ impl FactoryComponent for MessagesTabModel {
         sender: FactorySender<Self>,
     ) {
         match msg {
+            MessagesTabMsg::DigitsOnly(value) => {
+                self.max_messages = value;
+                info!("Max messages:{}", self.max_messages);
+            }
             MessagesTabMsg::ToggleMode(toggle) => {
                 self.mode = if toggle {
                     widgets.cached_controls.set_visible(true);
@@ -501,6 +602,14 @@ impl FactoryComponent for MessagesTabModel {
                 self.page_size = page_size;
                 self.page_size_combo.widget().queue_allocate();
             }
+            MessagesTabMsg::FetchTypeChanged(_idx) => {
+                let fetch_type = match self.fetch_type_combo.model().get_active_elem() {
+                    Some(ps) => ps.clone(),
+                    None => KafkaFetch::default(),
+                };
+                self.fetch_type = fetch_type;
+                self.fetch_type_combo.widget().queue_allocate();
+            }
             MessagesTabMsg::Selection(size) => {
                 let mut copy_content = String::from("PARTITION;OFFSET;VALUE;TIMESTAMP");
                 let min_length = copy_content.len();
@@ -533,6 +642,22 @@ impl FactoryComponent for MessagesTabModel {
                         .unwrap()
                         .clipboard()
                         .set_text(copy_content.as_str());
+                }
+            }
+            MessagesTabMsg::CopyMessages(copy) => {
+                info!("copy selected messages");
+
+                let data = match copy {
+                    Copy::AllAsCsv => copy_all_as_csv(self),
+                    Copy::Value => copy_value(self),
+                    Copy::Key => copy_key(self),
+                };
+                if let Ok(data) = data {
+                    DisplayManager::get()
+                        .default_display()
+                        .unwrap()
+                        .clipboard()
+                        .set_text(data.as_str());
                 }
             }
             MessagesTabMsg::Open(connection, topic) => {
@@ -597,6 +722,8 @@ impl FactoryComponent for MessagesTabModel {
                 let page_size = self.page_size;
                 let token = self.token.clone();
                 let search = get_search_term(widgets);
+                let fetch = self.fetch_type.clone();
+                let max_messages: i64 = self.max_messages as i64;
                 widgets.pag_current_entry.set_text("0");
                 sender.oneshot_command(async move {
                     // Run async background task
@@ -612,6 +739,8 @@ impl FactoryComponent for MessagesTabModel {
                                 page_size,
                                 offset_partition: (0, 0),
                                 search: search,
+                                fetch,
+                                max_messages,
                             },
                         )
                         .await
@@ -647,6 +776,8 @@ impl FactoryComponent for MessagesTabModel {
                 );
                 let search = get_search_term(widgets);
                 let token = self.token.clone();
+                let fetch = self.fetch_type.clone();
+                let max_messages: i64 = self.max_messages as i64;
                 info!(
                     "getting next messages [page_size={}, last_offset={}, last_partition={}]",
                     page_size, offset, partition
@@ -665,6 +796,8 @@ impl FactoryComponent for MessagesTabModel {
                                 page_size,
                                 offset_partition: (offset, partition),
                                 search: search,
+                                fetch,
+                                max_messages,
                             },
                         )
                         .await
@@ -700,6 +833,8 @@ impl FactoryComponent for MessagesTabModel {
                 );
                 let token = self.token.clone();
                 let search = get_search_term(widgets);
+                let fetch = self.fetch_type.clone();
+                let max_messages: i64 = self.max_messages as i64;
                 sender.oneshot_command(async move {
                     // Run async background task
                     let messages_worker = MessagesWorker::new();
@@ -714,6 +849,8 @@ impl FactoryComponent for MessagesTabModel {
                                 page_size,
                                 offset_partition: (offset, partition),
                                 search: search,
+                                fetch,
+                                max_messages,
                             },
                         )
                         .await
@@ -837,6 +974,7 @@ fn on_loading(widgets: &mut MessagesTabModelWidgets, enabled: bool) {
     widgets.btn_get_messages.set_sensitive(enabled);
     widgets.btn_cache_refresh.set_sensitive(enabled);
     widgets.btn_cache_toggle.set_sensitive(enabled);
+    widgets.max_messages.set_sensitive(enabled);
 }
 
 fn fill_pagination(
@@ -899,4 +1037,66 @@ fn fill_pagination(
             widgets.btn_previous_page.set_sensitive(true);
         }
     }
+}
+
+fn copy_all_as_csv(model: &mut MessagesTabModel) -> Result<String, std::string::FromUtf8Error> {
+    let mut wtr = csv::WriterBuilder::new()
+        .delimiter(b';')
+        .quote_style(csv::QuoteStyle::NonNumeric)
+        .from_writer(vec![]);
+    let _ = wtr.write_record(&["PARTITION", "OFFSET", "KEY", "VALUE", "TIMESTAMP"]);
+    for i in 0..model.messages_wrapper.selection_model.n_items() {
+        if model.messages_wrapper.selection_model.is_selected(i) {
+            let item = model.messages_wrapper.get_visible(i).unwrap();
+            let partition = item.borrow().partition;
+            let offset = item.borrow().offset;
+            let key = item.borrow().key.clone();
+            let value = item.borrow().value.clone();
+            let clean_value = match serde_json::from_str::<serde_json::Value>(value.as_str()) {
+                Ok(json) => json.to_string(),
+                Err(_) => value.replace('\n', ""),
+            };
+            let timestamp = item.borrow().timestamp;
+            let record = StringRecord::from(vec![
+                partition.to_string(),
+                offset.to_string(),
+                key,
+                clean_value,
+                timestamp.unwrap_or_default().to_string(),
+            ]);
+            let _ = wtr.write_record(&record);
+        }
+    }
+    let data = String::from_utf8(wtr.into_inner().unwrap_or_default());
+    data
+}
+fn copy_value(model: &mut MessagesTabModel) -> Result<String, std::string::FromUtf8Error> {
+    let mut copy_content = String::default();
+    for i in 0..model.messages_wrapper.selection_model.n_items() {
+        if model.messages_wrapper.selection_model.is_selected(i) {
+            let item = model.messages_wrapper.get_visible(i).unwrap();
+            let value = item.borrow().value.clone();
+            let clean_value = match serde_json::from_str::<serde_json::Value>(value.as_str()) {
+                Ok(json) => json.to_string(),
+                Err(_) => value.replace('\n', ""),
+            };
+            let copy_text = format!(
+                "{}\n", clean_value);
+            copy_content.push_str(&copy_text.as_str());
+        }
+    }
+    Ok(copy_content)
+}
+fn copy_key(model: &mut MessagesTabModel) -> Result<String, std::string::FromUtf8Error> {
+    let mut copy_content = String::default();
+    for i in 0..model.messages_wrapper.selection_model.n_items() {
+        if model.messages_wrapper.selection_model.is_selected(i) {
+            let item = model.messages_wrapper.get_visible(i).unwrap();
+            let key = item.borrow().key.clone();
+            let copy_text = format!(
+                "{}\n", key);
+            copy_content.push_str(&copy_text.as_str());
+        }
+    }
+    Ok(copy_content)
 }

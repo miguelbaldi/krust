@@ -63,6 +63,7 @@ pub struct KrustMessage {
     pub topic: String,
     pub partition: i32,
     pub offset: i64,
+    pub key: String,
     pub value: String,
     pub timestamp: Option<i64>,
     pub headers: Vec<KrustHeader>,
@@ -106,10 +107,19 @@ impl MessagesRepository {
         .unwrap();
         conn
     }
+    pub fn get_init_connection(&mut self) -> Connection {
+        let conn = database_connection_with_name(&self.path, &self.database_name)
+            .expect("problem acquiring database connection");
+        conn
+    }
     pub fn init(&mut self) -> Result<(), ExternalError> {
-        self.get_connection().execute_batch(
-            "CREATE TABLE IF NOT EXISTS kr_message (partition INTEGER, offset INTEGER, value TEXT, timestamp INTEGER, headers TEXT, PRIMARY KEY (partition, offset));"
-        ).map_err(ExternalError::DatabaseError)
+        let result = self.get_init_connection().execute_batch(
+            "CREATE TABLE IF NOT EXISTS kr_message (partition INTEGER, offset INTEGER, key TEXT, value TEXT, timestamp INTEGER, headers TEXT, PRIMARY KEY (partition, offset));"
+        ).map_err(ExternalError::DatabaseError);
+        let _ = self.get_init_connection().execute_batch(
+            "ALTER TABLE kr_message ADD COLUMN key TEXT;"
+        ).ok();
+        result
     }
 
     pub fn destroy(&mut self) -> Result<(), ExternalError> {
@@ -123,14 +133,14 @@ impl MessagesRepository {
     ) -> Result<KrustMessage, ExternalError> {
         //let conn = self.get_connection();
         let mut stmt_by_id = conn.prepare_cached(
-            "INSERT INTO kr_message(partition, offset, value, timestamp, headers)
-            VALUES (:p, :o, :v, :t, :h)",
+            "INSERT INTO kr_message(partition, offset, key, value, timestamp, headers)
+            VALUES (:p, :o, :k, :v, :t, :h)",
         )?;
         let headers =
             ron::ser::to_string::<Vec<KrustHeader>>(message.headers.as_ref()).unwrap_or_default();
         let maybe_message = stmt_by_id
         .execute(
-            named_params! { ":p": message.partition, ":o": message.offset, ":v": message.value, ":t": message.timestamp, ":h": headers},
+            named_params! { ":p": message.partition, ":o": message.offset, ":k": message.key, ":v": message.value, ":t": message.timestamp, ":h": headers},
         )
         .map_err(ExternalError::DatabaseError);
 
@@ -201,14 +211,14 @@ impl MessagesRepository {
         let conn = self.get_connection();
         let mut stmt_query = match search {
             Some(_) => conn.prepare_cached(
-                "SELECT partition, offset, value, timestamp, headers
+                "SELECT partition, offset, key, value, timestamp, headers
                 FROM kr_message
                 WHERE value LIKE :search
                 ORDER BY offset, partition
                 LIMIT :ps",
             )?,
             None => conn.prepare_cached(
-                "SELECT partition, offset, value, timestamp, headers
+                "SELECT partition, offset, key, value, timestamp, headers
                 FROM kr_message
                 ORDER BY offset, partition
                 LIMIT :ps",
@@ -224,9 +234,10 @@ impl MessagesRepository {
             Ok(KrustMessage {
                 partition: row.get(0)?,
                 offset: row.get(1)?,
-                value: row.get(2)?,
-                timestamp: Some(row.get(3)?),
-                headers: string_to_headers(row.get(4)?)?,
+                key: row.get(2)?,
+                value: row.get(3)?,
+                timestamp: Some(row.get(4)?),
+                headers: string_to_headers(row.get(5)?)?,
                 topic: topic_name.clone(),
             })
         };
@@ -259,7 +270,7 @@ impl MessagesRepository {
         let conn = self.get_connection();
         let mut stmt_query = match search {
             Some(_) => conn.prepare_cached(
-                "SELECT partition, offset, value, timestamp, headers
+                "SELECT partition, offset, key, value, timestamp, headers
                 FROM kr_message
                 WHERE (offset, partition) > (:o, :p)
                 AND value LIKE :search
@@ -267,7 +278,7 @@ impl MessagesRepository {
                 LIMIT :ps",
             )?,
             None => conn.prepare_cached(
-                "SELECT partition, offset, value, timestamp, headers
+                "SELECT partition, offset, key, value, timestamp, headers
                 FROM kr_message
                 WHERE (offset, partition) > (:o, :p)
                 ORDER BY offset, partition
@@ -284,9 +295,10 @@ impl MessagesRepository {
             Ok(KrustMessage {
                 partition: row.get(0)?,
                 offset: row.get(1)?,
-                value: row.get(2)?,
-                timestamp: Some(row.get(3)?),
-                headers: string_to_headers(row.get(4)?)?,
+                key: row.get(2)?,
+                value: row.get(3)?,
+                timestamp: Some(row.get(4)?),
+                headers: string_to_headers(row.get(5)?)?,
                 topic: topic_name.clone(),
             })
         };
@@ -318,8 +330,8 @@ impl MessagesRepository {
         let conn = self.get_connection();
         let mut stmt_query = match search {
             Some(_) => conn.prepare_cached(
-                "SELECT partition, offset, value, timestamp, headers FROM (
-                    SELECT partition, offset, value, timestamp, headers
+                "SELECT partition, offset, key, value, timestamp, headers FROM (
+                    SELECT partition, offset, key, value, timestamp, headers
                     FROM kr_message
                     WHERE (offset, partition) < (:o, :p)
                     AND value LIKE :search
@@ -328,8 +340,8 @@ impl MessagesRepository {
                 ) ORDER BY offset ASC, partition ASC",
             )?,
             None => conn.prepare_cached(
-                "SELECT partition, offset, value, timestamp, headers FROM (
-                    SELECT partition, offset, value, timestamp, headers
+                "SELECT partition, offset, key, value, timestamp, headers FROM (
+                    SELECT partition, offset, key, value, timestamp, headers
                     FROM kr_message
                     WHERE (offset, partition) < (:o, :p)
                     ORDER BY offset DESC, partition DESC
@@ -347,9 +359,10 @@ impl MessagesRepository {
             Ok(KrustMessage {
                 partition: row.get(0)?,
                 offset: row.get(1)?,
-                value: row.get(2)?,
-                timestamp: Some(row.get(3)?),
-                headers: string_to_headers(row.get(4)?)?,
+                key: row.get(2)?,
+                value: row.get(3)?,
+                timestamp: Some(row.get(4)?),
+                headers: string_to_headers(row.get(5)?)?,
                 topic: topic_name.clone(),
             })
         };
@@ -577,17 +590,19 @@ impl Repository {
             topic,
             partition,
             offset,
+            key,
             value,
             timestamp,
             headers,
         } = message;
-        let mut insert_stmt = self.conn.prepare_cached("INSERT INTO kr_message (connection, topic, partition, offset, value, timestamp) VALUES (?, ?, ?, ?, ?, ?) RETURNING id")?;
+        let mut insert_stmt = self.conn.prepare_cached("INSERT INTO kr_message (connection, topic, partition, offset, key, value, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id")?;
         let result = insert_stmt
             .query_row(params![], |_row| {
                 Ok(KrustMessage {
                     topic,
                     partition,
                     offset,
+                    key,
                     value,
                     timestamp,
                     headers,

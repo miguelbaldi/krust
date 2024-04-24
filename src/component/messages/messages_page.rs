@@ -11,7 +11,6 @@ use sourceview5 as sourceview;
 
 use super::messages_tab::{MessagesTabInit, MessagesTabModel};
 
-#[derive(Debug)]
 pub struct MessagesPageModel {
     topic: Option<KrustTopic>,
     connection: Option<KrustConnection>,
