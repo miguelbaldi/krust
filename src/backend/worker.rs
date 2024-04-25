@@ -138,7 +138,7 @@ impl MessagesWorker {
             cached,
             partitions: vec![],
             total: None,
-            favourite: None,
+            favourite: request.topic.favourite.clone(),
         };
         let topic = repo.save_topic(
             topic.connection_id.expect("should have connection id"),

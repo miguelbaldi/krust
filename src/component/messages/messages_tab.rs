@@ -587,7 +587,7 @@ impl FactoryComponent for MessagesTabModel {
                         cached: None,
                         partitions: vec![],
                         total: None,
-                        favourite: None,
+                        favourite: cloned_topic.favourite.clone(),
                     };
                     let conn = self.connection.clone().unwrap();
                     MessagesWorker::new().cleanup_messages(&MessagesCleanupRequest {
@@ -659,7 +659,10 @@ impl FactoryComponent for MessagesTabModel {
                 let mut repo = Repository::new();
                 let maybe_topic = repo.find_topic(*conn_id, topic_name);
                 self.topic = maybe_topic.clone().or(Some(topic));
-                let toggled = maybe_topic.is_some();
+                let toggled = match &maybe_topic {
+                    Some(t) => t.cached.is_some(),
+                    None => false,
+                };
                 let cache_ts = maybe_topic
                     .and_then(|t| {
                         t.cached.map(|ts| {
