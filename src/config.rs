@@ -61,7 +61,7 @@ impl State {
     pub fn write(&self) -> Result<(), ExternalError> {
         let path = state_path()?;
 
-        info!(
+        trace!(
             "persisting application state: {:?}, into path: {:?}",
             self, path
         );
@@ -123,7 +123,7 @@ fn state_path() -> Result<PathBuf, ExternalError> {
 }
 
 pub fn ensure_path_dir(path: &PathBuf) -> Result<PathBuf, ExternalError> {
-    info!("ensuring path: {:?}", path);
+    trace!("ensuring path: {:?}", path);
     fs::create_dir_all(path).map_err(|op| {
         ExternalError::ConfigurationError(
             format!("unable to create intermediate directories: {:?}", op),
@@ -134,6 +134,6 @@ pub fn ensure_path_dir(path: &PathBuf) -> Result<PathBuf, ExternalError> {
 
 pub fn ensure_app_config_dir() -> Result<PathBuf, ExternalError> {
     let app_config_path = app_config_dir()?;
-    info!("app config path: {:?}", app_config_path);
+    trace!("app config path: {:?}", app_config_path);
     ensure_path_dir(&app_config_path)
 }

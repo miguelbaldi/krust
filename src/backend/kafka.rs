@@ -140,6 +140,7 @@ impl KafkaBackend {
                 cached: None,
                 partitions,
                 total: None,
+                favourite: None,
             });
         }
         topics
@@ -286,6 +287,7 @@ impl KafkaBackend {
                 partitions.clone()
             },
             total: Some(message_count),
+            favourite: None,
         }
     }
     pub async fn cache_messages_for_topic(
@@ -375,7 +377,7 @@ impl KafkaBackend {
                         topic: m.topic().to_string(),
                         partition: m.partition(),
                         offset: m.offset(),
-                        key: key.to_string(),
+                        key: Some(key.to_string()),
                         timestamp: m.timestamp().to_millis(),
                         value: payload.to_string(),
                         headers,
@@ -484,7 +486,7 @@ impl KafkaBackend {
                             topic: m.topic().to_string(),
                             partition: m.partition(),
                             offset: m.offset(),
-                            key: key.to_string(),
+                            key: Some(key.to_string()),
                             timestamp: m.timestamp().to_millis(),
                             value: payload.to_string(),
                             headers,

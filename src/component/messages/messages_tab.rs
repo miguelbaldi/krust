@@ -1,4 +1,6 @@
 #![allow(deprecated)]
+use std::borrow::Borrow;
+
 // See: https://gitlab.gnome.org/GNOME/gtk/-/issues/5644
 use chrono::{TimeZone, Utc};
 use chrono_tz::America;
@@ -50,6 +52,7 @@ relm4::new_stateless_action!(pub(super) CopyMessagesAsCsv, MessagesListActionGro
 relm4::new_stateless_action!(pub(super) CopyMessagesValue, MessagesListActionGroup, "copy-messages-value");
 relm4::new_stateless_action!(pub(super) CopyMessagesKey, MessagesListActionGroup, "copy-messages-key");
 
+#[derive(Debug)]
 pub struct MessagesTabModel {
     token: CancellationToken,
     pub topic: Option<KrustTopic>,
@@ -88,7 +91,6 @@ pub enum MessagesTabMsg {
     OpenMessage(u32),
     SearchMessages,
     LiveSearchMessages(String),
-    Selection(u32),
     PageSizeChanged(usize),
     FetchTypeChanged(usize),
     ToggleMode(bool),
@@ -99,6 +101,7 @@ pub enum MessagesTabMsg {
 #[derive(Debug)]
 pub enum CommandMsg {
     Data(MessagesResponse),
+    CopyToClipboard(String),
 }
 
 const AVAILABLE_PAGE_SIZES: [u16; 6] = [50, 100, 500, 1000, 2000, 5000];
@@ -584,6 +587,7 @@ impl FactoryComponent for MessagesTabModel {
                         cached: None,
                         partitions: vec![],
                         total: None,
+                        favourite: None,
                     };
                     let conn = self.connection.clone().unwrap();
                     MessagesWorker::new().cleanup_messages(&MessagesCleanupRequest {
@@ -610,55 +614,43 @@ impl FactoryComponent for MessagesTabModel {
                 self.fetch_type = fetch_type;
                 self.fetch_type_combo.widget().queue_allocate();
             }
-            MessagesTabMsg::Selection(size) => {
-                let mut copy_content = String::from("PARTITION;OFFSET;VALUE;TIMESTAMP");
-                let min_length = copy_content.len();
-                for i in 0..size {
-                    if self.messages_wrapper.selection_model.is_selected(i) {
-                        let item = self.messages_wrapper.get_visible(i).unwrap();
-                        let partition = item.borrow().partition;
-                        let offset = item.borrow().offset;
-                        let value = item.borrow().value.clone();
-                        let clean_value =
-                            match serde_json::from_str::<serde_json::Value>(value.as_str()) {
-                                Ok(json) => json.to_string(),
-                                Err(_) => value.replace('\n', ""),
-                            };
-                        let timestamp = item.borrow().timestamp;
-                        let copy_text = format!(
-                            "\n{};{};{};{}",
-                            partition,
-                            offset,
-                            clean_value,
-                            timestamp.unwrap_or_default()
-                        );
-                        copy_content.push_str(copy_text.as_str());
-                        info!("selected offset[{}]", copy_text);
-                    }
-                }
-                if copy_content.len() > min_length {
-                    DisplayManager::get()
-                        .default_display()
-                        .unwrap()
-                        .clipboard()
-                        .set_text(copy_content.as_str());
-                }
-            }
             MessagesTabMsg::CopyMessages(copy) => {
                 info!("copy selected messages");
-
-                let data = match copy {
-                    Copy::AllAsCsv => copy_all_as_csv(self),
-                    Copy::Value => copy_value(self),
-                    Copy::Key => copy_key(self),
-                };
-                if let Ok(data) = data {
-                    DisplayManager::get()
-                        .default_display()
-                        .unwrap()
-                        .clipboard()
-                        .set_text(data.as_str());
+                let topic = self.topic.clone().unwrap().name;
+                let mut selected_items = vec![];
+                for i in 0..self.messages_wrapper.selection_model.n_items() {
+                    if self.messages_wrapper.selection_model.is_selected(i) {
+                        let item = self.messages_wrapper.get_visible(i).unwrap();
+                        selected_items.push(KrustMessage {
+                            headers: item.borrow().headers.clone(),
+                            topic: topic.clone(),
+                            partition: item.borrow().partition,
+                            offset: item.borrow().offset,
+                            key: Some(item.borrow().key.clone()),
+                            value: item.borrow().value.clone(),
+                            timestamp: item.borrow().timestamp.clone(),
+                        });
+                    }
                 }
+                sender.spawn_oneshot_command(move || {
+                    let data = match copy {
+                        Copy::AllAsCsv => copy_all_as_csv(&selected_items),
+                        Copy::Value => copy_value(&selected_items),
+                        Copy::Key => copy_key(&selected_items),
+                    };
+                    if let Ok(data) = data {
+                        CommandMsg::CopyToClipboard(data)
+                    } else {
+                        CommandMsg::CopyToClipboard(String::default())
+                    }
+                });
+                // if let Ok(data) = data {
+                //     DisplayManager::get()
+                //         .default_display()
+                //         .unwrap()
+                //         .clipboard()
+                //         .set_text(data.as_str());
+                // }
             }
             MessagesTabMsg::Open(connection, topic) => {
                 let conn_id = &connection.id.unwrap();
@@ -955,6 +947,14 @@ impl FactoryComponent for MessagesTabModel {
     fn update_cmd(&mut self, message: Self::CommandOutput, sender: FactorySender<Self>) {
         match message {
             CommandMsg::Data(messages) => sender.input(MessagesTabMsg::UpdateMessages(messages)),
+            CommandMsg::CopyToClipboard(data) => {
+                info!("setting text to clipboard");
+                DisplayManager::get()
+                    .default_display()
+                    .unwrap()
+                    .clipboard()
+                    .set_text(data.as_str());
+            }
         }
     }
 }
@@ -1039,64 +1039,55 @@ fn fill_pagination(
     }
 }
 
-fn copy_all_as_csv(model: &mut MessagesTabModel) -> Result<String, std::string::FromUtf8Error> {
+fn copy_all_as_csv(
+    selected_items: &Vec<KrustMessage>,
+) -> Result<String, std::string::FromUtf8Error> {
     let mut wtr = csv::WriterBuilder::new()
         .delimiter(b';')
         .quote_style(csv::QuoteStyle::NonNumeric)
         .from_writer(vec![]);
     let _ = wtr.write_record(&["PARTITION", "OFFSET", "KEY", "VALUE", "TIMESTAMP"]);
-    for i in 0..model.messages_wrapper.selection_model.n_items() {
-        if model.messages_wrapper.selection_model.is_selected(i) {
-            let item = model.messages_wrapper.get_visible(i).unwrap();
-            let partition = item.borrow().partition;
-            let offset = item.borrow().offset;
-            let key = item.borrow().key.clone();
-            let value = item.borrow().value.clone();
-            let clean_value = match serde_json::from_str::<serde_json::Value>(value.as_str()) {
-                Ok(json) => json.to_string(),
-                Err(_) => value.replace('\n', ""),
-            };
-            let timestamp = item.borrow().timestamp;
-            let record = StringRecord::from(vec![
-                partition.to_string(),
-                offset.to_string(),
-                key,
-                clean_value,
-                timestamp.unwrap_or_default().to_string(),
-            ]);
-            let _ = wtr.write_record(&record);
-        }
+    for item in selected_items {
+        let partition = item.partition;
+        let offset = item.offset;
+        let key = item.key.clone();
+        let value = item.value.clone();
+        let clean_value = match serde_json::from_str::<serde_json::Value>(value.as_str()) {
+            Ok(json) => json.to_string(),
+            Err(_) => value.replace('\n', ""),
+        };
+        let timestamp = item.borrow().timestamp;
+        let record = StringRecord::from(vec![
+            partition.to_string(),
+            offset.to_string(),
+            key.unwrap_or_default(),
+            clean_value,
+            timestamp.unwrap_or_default().to_string(),
+        ]);
+        let _ = wtr.write_record(&record);
     }
     let data = String::from_utf8(wtr.into_inner().unwrap_or_default());
     data
 }
-fn copy_value(model: &mut MessagesTabModel) -> Result<String, std::string::FromUtf8Error> {
+fn copy_value(selected_items: &Vec<KrustMessage>) -> Result<String, std::string::FromUtf8Error> {
     let mut copy_content = String::default();
-    for i in 0..model.messages_wrapper.selection_model.n_items() {
-        if model.messages_wrapper.selection_model.is_selected(i) {
-            let item = model.messages_wrapper.get_visible(i).unwrap();
-            let value = item.borrow().value.clone();
-            let clean_value = match serde_json::from_str::<serde_json::Value>(value.as_str()) {
-                Ok(json) => json.to_string(),
-                Err(_) => value.replace('\n', ""),
-            };
-            let copy_text = format!(
-                "{}\n", clean_value);
-            copy_content.push_str(&copy_text.as_str());
-        }
+    for item in selected_items {
+        let value = item.value.clone();
+        let clean_value = match serde_json::from_str::<serde_json::Value>(value.as_str()) {
+            Ok(json) => json.to_string(),
+            Err(_) => value.replace('\n', ""),
+        };
+        let copy_text = format!("{}\n", clean_value);
+        copy_content.push_str(&copy_text.as_str());
     }
     Ok(copy_content)
 }
-fn copy_key(model: &mut MessagesTabModel) -> Result<String, std::string::FromUtf8Error> {
+fn copy_key(selected_items: &Vec<KrustMessage>) -> Result<String, std::string::FromUtf8Error> {
     let mut copy_content = String::default();
-    for i in 0..model.messages_wrapper.selection_model.n_items() {
-        if model.messages_wrapper.selection_model.is_selected(i) {
-            let item = model.messages_wrapper.get_visible(i).unwrap();
-            let key = item.borrow().key.clone();
-            let copy_text = format!(
-                "{}\n", key);
-            copy_content.push_str(&copy_text.as_str());
-        }
+    for item in selected_items {
+        let key = item.key.clone();
+        let copy_text = format!("{}\n", key.unwrap_or_default());
+        copy_content.push_str(&copy_text.as_str());
     }
     Ok(copy_content)
 }

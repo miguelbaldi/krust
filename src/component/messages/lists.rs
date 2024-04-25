@@ -113,7 +113,7 @@ impl MessageListItem {
         Self {
             offset: value.offset,
             partition: value.partition,
-            key: value.key,
+            key: value.key.unwrap_or_default(),
             value: value.value,
             timestamp: value.timestamp,
             headers: value.headers,

@@ -164,7 +164,7 @@ impl Component for AppModel {
                                     set_name: "Topics",
                                     set_title: "Topics",
                                 },
-                                add_child = messages_page.widget() -> &gtk::Box {} -> {
+                                add_child = messages_page.widget() -> &adw::TabOverview {} -> {
                                     set_name: "Messages",
                                     set_title: "Messages",
                                 },

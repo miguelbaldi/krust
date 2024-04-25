@@ -6,6 +6,7 @@ use std::{fmt::Display, str::FromStr};
 use rusqlite::{named_params, params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use strum::EnumString;
+use tracing::warn;
 
 use crate::config::{
     database_connection, database_connection_with_name, destroy_database_with_name, ExternalError,
@@ -50,6 +51,7 @@ pub struct KrustTopic {
     pub cached: Option<i64>,
     pub partitions: Vec<Partition>,
     pub total: Option<usize>,
+    pub favourite: Option<bool>,
 }
 
 impl Display for KrustTopic {
@@ -63,7 +65,7 @@ pub struct KrustMessage {
     pub topic: String,
     pub partition: i32,
     pub offset: i64,
-    pub key: String,
+    pub key: Option<String>,
     pub value: String,
     pub timestamp: Option<i64>,
     pub headers: Vec<KrustHeader>,
@@ -116,9 +118,10 @@ impl MessagesRepository {
         let result = self.get_init_connection().execute_batch(
             "CREATE TABLE IF NOT EXISTS kr_message (partition INTEGER, offset INTEGER, key TEXT, value TEXT, timestamp INTEGER, headers TEXT, PRIMARY KEY (partition, offset));"
         ).map_err(ExternalError::DatabaseError);
-        let _ = self.get_init_connection().execute_batch(
-            "ALTER TABLE kr_message ADD COLUMN key TEXT;"
-        ).ok();
+        let _ = self
+            .get_init_connection()
+            .execute_batch("ALTER TABLE kr_message ADD COLUMN key TEXT;")
+            .ok();
         result
     }
 
@@ -399,10 +402,21 @@ impl Repository {
     }
 
     pub fn init(&mut self) -> Result<(), ExternalError> {
-        self.conn.execute_batch("
+        let _result = self.conn.execute_batch("
         CREATE TABLE IF NOT EXISTS kr_connection(id INTEGER PRIMARY KEY, name TEXT UNIQUE, brokersList TEXT, securityType TEXT, saslMechanism TEXT, saslUsername TEXT, saslPassword TEXT);
         CREATE TABLE IF NOT EXISTS kr_topic(connection_id INTEGER, name TEXT, cached INTEGER, PRIMARY KEY (connection_id, name), FOREIGN KEY (connection_id) REFERENCES kr_connection(id));
-        ").map_err(ExternalError::DatabaseError)
+        ").map_err(ExternalError::DatabaseError)?;
+        let _result_add_topic_fav = self
+            .conn
+            .execute_batch(
+                "
+        ALTER TABLE kr_topic ADD COLUMN favourite INTEGER DEFAULT 0;
+        ",
+            )
+            .map_err(ExternalError::DatabaseError).unwrap_or_else(|e| {
+                warn!("kr_topic.favourite: {:?}", e);
+            });
+        Ok(())
     }
 
     pub fn list_all_connections(&mut self) -> Result<Vec<KrustConnection>, ExternalError> {
@@ -512,11 +526,12 @@ impl Repository {
     ) -> Result<KrustTopic, ExternalError> {
         let name = topic.name.clone();
         let cached = topic.cached;
+        let favourite = topic.favourite;
         let mut stmt_by_id = self.conn.prepare_cached(
-            "INSERT INTO kr_topic(connection_id, name, cached)
-            VALUES (:cid, :topic, :cached)
+            "INSERT INTO kr_topic(connection_id, name, cached, favourite)
+            VALUES (:cid, :topic, :cached, :favourite)
             ON CONFLICT(connection_id, name)
-            DO UPDATE SET cached=excluded.cached",
+            DO UPDATE SET cached=excluded.cached, favourite=excluded.favourite",
         )?;
         let row_to_model = move |_| {
             Ok(KrustTopic {
@@ -525,16 +540,18 @@ impl Repository {
                 cached,
                 partitions: vec![],
                 total: None,
+                favourite,
             })
         };
 
         stmt_by_id
             .execute(
-                named_params! { ":cid": &conn_id, ":topic": &name.clone(), ":cached": &cached },
+                named_params! { ":cid": &conn_id, ":topic": &name.clone(), ":cached": &cached, ":favourite": &favourite },
             )
             .map(row_to_model)?
             .map_err(ExternalError::DatabaseError)
     }
+
     pub fn delete_topic(
         &mut self,
         conn_id: usize,
@@ -554,7 +571,7 @@ impl Repository {
 
     pub fn find_topic(&mut self, conn_id: usize, topic_name: &String) -> Option<KrustTopic> {
         let stmt = self.conn
-        .prepare_cached("SELECT connection_id, name, cached FROM kr_topic WHERE connection_id = :cid AND name = :topic");
+        .prepare_cached("SELECT connection_id, name, cached, favourite FROM kr_topic WHERE connection_id = :cid AND name = :topic");
         stmt.ok()?
             .query_row(
                 named_params! {":cid": &conn_id, ":topic": &topic_name },
@@ -565,50 +582,33 @@ impl Repository {
                         cached: row.get(2)?,
                         partitions: vec![],
                         total: None,
+                        favourite: row.get(3)?,
                     })
                 },
             )
             .ok()
     }
-
-    pub fn delete_all_messages_for_topic(
-        &mut self,
-        conn_id: usize,
-        topic_name: String,
-    ) -> Result<usize, ExternalError> {
-        let mut delete_stmt = self.conn.prepare_cached(
-            "DELETE from kr_message where connection = :conn_id AND topic = :topic",
-        )?;
-        let result = delete_stmt
-            .execute(named_params! {":conn_id": conn_id, ":topic": topic_name})
-            .map_err(ExternalError::DatabaseError)?;
-        Ok(result)
-    }
-
-    pub fn insert_message(&mut self, message: KrustMessage) -> Result<KrustMessage, ExternalError> {
-        let KrustMessage {
-            topic,
-            partition,
-            offset,
-            key,
-            value,
-            timestamp,
-            headers,
-        } = message;
-        let mut insert_stmt = self.conn.prepare_cached("INSERT INTO kr_message (connection, topic, partition, offset, key, value, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id")?;
-        let result = insert_stmt
-            .query_row(params![], |_row| {
-                Ok(KrustMessage {
-                    topic,
-                    partition,
-                    offset,
-                    key,
-                    value,
-                    timestamp,
-                    headers,
-                })
-            })
-            .map_err(ExternalError::DatabaseError)?;
-        Ok(result)
+    pub fn find_topics_by_connection(&mut self, conn_id: usize) -> Result<Vec<KrustTopic>, ExternalError> {
+        let mut stmt = self.conn
+        .prepare_cached("SELECT connection_id, name, cached, favourite FROM kr_topic WHERE connection_id = :cid")?;
+        let rows = stmt
+            .query_and_then(
+                named_params! {":cid": &conn_id },
+                |row| {
+                    Ok::<KrustTopic, rusqlite::Error>(KrustTopic {
+                        connection_id: row.get(0)?,
+                        name: row.get(1)?,
+                        cached: row.get(2)?,
+                        partitions: vec![],
+                        total: None,
+                        favourite: row.get(3)?,
+                    })
+                },
+            ).map_err(ExternalError::DatabaseError)?;
+        let mut topics = vec![];
+        for topic in rows {
+            topics.push(topic?);
+        }
+        Ok(topics)
     }
 }
