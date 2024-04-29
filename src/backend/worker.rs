@@ -33,6 +33,9 @@ pub struct MessagesRequest {
     pub page_operation: PageOp,
     pub page_size: u16,
     pub offset_partition: (usize, usize),
+    pub search: Option<String>,
+    pub fetch: KafkaFetch,
+    pub max_messages: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +45,7 @@ pub struct MessagesResponse {
     pub total: usize,
     pub messages: Vec<KrustMessage>,
     pub topic: Option<KrustTopic>,
+    pub search: Option<String>,
 }
 
 pub struct MessagesCleanupRequest {
@@ -92,7 +96,7 @@ impl MessagesWorker {
                 _ = token.cancelled() => {
                     info!("request {:?} cancelled", &req);
                     // The token was cancelled
-                    Ok(MessagesResponse { total: 0, messages: Vec::new(), topic: None, page_operation: req.page_operation, page_size: req.page_size})
+                    Ok(MessagesResponse { total: 0, messages: Vec::new(), topic: Some(req.topic), page_operation: req.page_operation, page_size: req.page_size, search: req.search})
                 }
                 messages = self.get_messages_by_mode(&req) => {
                     messages
@@ -111,6 +115,7 @@ impl MessagesWorker {
             MessagesMode::Cached { refresh: _ } => self.get_messages_cached(request).await,
         }
     }
+
     async fn get_messages_cached(
         self,
         request: &MessagesRequest,
@@ -132,6 +137,8 @@ impl MessagesWorker {
             name: request.topic.name.clone(),
             cached,
             partitions: vec![],
+            total: None,
+            favourite: request.topic.favourite.clone(),
         };
         let topic = repo.save_topic(
             topic.connection_id.expect("should have connection id"),
@@ -142,48 +149,70 @@ impl MessagesWorker {
         let total = match request.topic.cached {
             Some(_) => {
                 if refresh {
-                    let cached_total = mrepo.count_messages().unwrap_or_default();
-                    let total = kafka.topic_message_count(&topic.name).await - cached_total;
                     let partitions = mrepo.find_offsets().ok();
+                    let topic = kafka
+                    .topic_message_count(&topic.name, None, None, partitions.clone())
+                    .await;
+                    let partitions = topic.partitions.clone();
+                    let total = topic.total.unwrap_or_default();
                     kafka
-                        .cache_messages_for_topic(
-                            topic_name,
-                            total,
-                            &mut mrepo,
-                            partitions,
-                            Some(KafkaFetch::Newest),
-                        )
-                        .await
-                        .unwrap();
-                }
-                mrepo.count_messages().unwrap_or_default()
-            }
-            None => {
-                let total = kafka.topic_message_count(&topic.name).await;
-                mrepo.init().unwrap();
-                kafka
                     .cache_messages_for_topic(
                         topic_name,
                         total,
                         &mut mrepo,
-                        None,
-                        Some(KafkaFetch::Oldest),
+                        Some(partitions),
+                        Some(KafkaFetch::Newest),
                     )
                     .await
                     .unwrap();
+                }
+                mrepo
+                .count_messages(request.search.clone())
+                .unwrap_or_default()
+            }
+            None => {
+                let total = kafka
+                .topic_message_count(&topic.name, None, None, None)
+                .await
+                .total
+                .unwrap_or_default();
+                mrepo.init().unwrap();
+                kafka
+                .cache_messages_for_topic(
+                    topic_name,
+                    total,
+                    &mut mrepo,
+                    None,
+                    Some(KafkaFetch::Oldest),
+                )
+                .await
+                .unwrap();
+                let total = if request.search.clone().is_some() {
+                    mrepo
+                    .count_messages(request.search.clone())
+                    .unwrap_or_default()
+                } else {
+                    total
+                };
                 total
             }
         };
         let messages = match request.page_operation {
             PageOp::Next => match request.offset_partition {
-                (0, 0) => mrepo.find_messages(request.page_size).unwrap(),
+                (0, 0) => mrepo
+                .find_messages(request.clone().page_size, request.clone().search)
+                .unwrap(),
                 offset_partition => mrepo
-                    .find_next_messages(request.page_size, offset_partition)
-                    .unwrap(),
+                .find_next_messages(request.page_size, offset_partition, request.clone().search)
+                .unwrap(),
             },
             PageOp::Prev => mrepo
-                .find_prev_messages(request.page_size, request.offset_partition)
-                .unwrap(),
+            .find_prev_messages(
+                request.page_size,
+                request.offset_partition,
+                request.clone().search,
+            )
+            .unwrap(),
         };
         Ok(MessagesResponse {
             total,
@@ -191,6 +220,7 @@ impl MessagesWorker {
             topic: Some(topic),
             page_operation: request.page_operation,
             page_size: request.page_size,
+            search: request.search.clone(),
         })
     }
 
@@ -201,15 +231,20 @@ impl MessagesWorker {
         let kafka = KafkaBackend::new(&request.connection);
         let topic = &request.topic.name;
         // Run async background task
-        let total = kafka.topic_message_count(topic).await;
-        let duration = kafka.list_messages_for_topic(topic, total).await?;
-        info!("get_messages_live {:?}", duration);
+        let messages = kafka
+        .list_messages_for_topic(
+            topic,
+            Some(request.fetch.clone()),
+            Some(request.max_messages),
+        )
+        .await?;
         Ok(MessagesResponse {
-            total,
-            messages: vec![],
+            total: messages.len(),
+            messages: messages,
             topic: Some(request.topic.clone()),
             page_operation: request.page_operation,
             page_size: request.page_size,
+            search: request.search.clone(),
         })
     }
 }

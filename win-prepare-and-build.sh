@@ -35,6 +35,7 @@ cp -fvr /tmp/mingw64/lib/girepository-1.0/ /usr/x86_64-w64-mingw32/sys-root/ming
 
 cd /mnt
 mkdir -p package/share/icons/hicolor/scalable/
+cp -rfv /usr/share/icons/Adwaita/ package/share/icons/
 cp -rfv /tmp/mingw64/share/icons/hicolor/scalable/actions package/share/icons/hicolor/scalable/
 cp -rfv /tmp/mingw64/share/gtksourceview-5 package/share/
 cp -rfv /tmp/mingw64/lib/girepository-1.0/ package/lib/

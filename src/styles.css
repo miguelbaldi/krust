@@ -1,3 +1,11 @@
+/*
+Logo/Theme colors:
+Red Orange 4: #FF3F34
+Pickled Bluewood 2: #314459
+Mystic (light blue): #D8E9F0
+
+*/
+
 .header-title {
   font-weight: bold;
 }
@@ -13,4 +21,51 @@ button.krust-toggle:checked {
 
 .status-bar {
   background: #FDEBD8;
+}
+
+.tab-close-button {}
+
+columnview.column-separators listview row:nth-child(odd):not(:selected) {
+  background-color: #ebeaeafd;
+}
+
+btn-favourite check {
+  -gtk-icon-source: -gtk-icontheme("non-starred-symbolic");
+  background-clip: border-box;
+  background-image: none;
+  border-color: white;
+  color: inherit;
+  box-shadow: 0 0 0 0;
+  -gtk-icon-size: 20px;
+  padding: 0 0 0 0;
+}
+
+btn-favourite check:checked {
+  -gtk-icon-source: -gtk-icontheme("starred-symbolic");
+  background-clip: border-box;
+  background-image: none;
+  background-color: transparent;
+  border-color: white;
+  box-shadow: 0 0 0 0;
+  -gtk-icon-size: 20px;
+  padding: 0 0 0 0;
+  color: #FF3F34;
+  animation: spin 1s linear 1s initial;
+  animation-name: spin;
+  animation-duration: 5s;
+  animation-timing-function: ease-in-out;
+  animation-delay: 1s;
+  animation-iteration-count: initial;
+  animation-direction: normal;
+}
+
+tab:selected {
+  background-color: #b7f39b;
+  /*background-color: #D8E9F0;*/
+  font-weight: bolder;
+}
+
+.tab-title label {
+  text-decoration-line: none;
+
 }

@@ -113,7 +113,7 @@ impl MessageListItem {
         Self {
             offset: value.offset,
             partition: value.partition,
-            key: "".to_string(),
+            key: value.key.unwrap_or_default(),
             value: value.value,
             timestamp: value.timestamp,
             headers: value.headers,
@@ -203,16 +203,45 @@ impl LabelColumn for MessageValueColumn {
     }
 
     fn format_cell_value(value: &Self::Value) -> String {
-        if value.len() >= 150 {
+        if value.len() >= 100 {
             format!(
                 "{}...",
                 value
                     .replace('\n', " ")
-                    .get(0..150)
+                    .get(0..100)
                     .unwrap_or("")
             )
         } else {
             format!("{}...", value)
+        }
+    }
+}
+pub struct MessageKeyColumn;
+
+impl LabelColumn for MessageKeyColumn {
+    type Item = MessageListItem;
+    type Value = String;
+
+    const COLUMN_NAME: &'static str = "Key";
+    const ENABLE_RESIZE: bool = true;
+    const ENABLE_EXPAND: bool = true;
+    const ENABLE_SORT: bool = false;
+
+    fn get_cell_value(item: &Self::Item) -> Self::Value {
+        item.key.clone()
+    }
+
+    fn format_cell_value(value: &Self::Value) -> String {
+        if value.len() >= 40 {
+            format!(
+                "{}...",
+                value
+                    .replace('\n', " ")
+                    .get(0..40)
+                    .unwrap_or("")
+            )
+        } else {
+            format!("{}", value)
         }
     }
 }

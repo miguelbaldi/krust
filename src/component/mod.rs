@@ -3,8 +3,8 @@
 pub mod app;
 pub mod messages;
 
- mod status_bar;
 pub(crate) mod connection_list;
- mod connection_page;
- mod topics_page;
- mod settings_page;
+mod connection_page;
+mod settings_page;
+mod status_bar;
+mod topics_page;

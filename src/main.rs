@@ -33,7 +33,7 @@ fn main() -> Result<(), ()> {
         // Enable the `INFO` level for anything in `my_crate`
         .with_target("relm4", Level::WARN)
         // Enable the `DEBUG` level for a specific module.
-        .with_target("krust", Level::DEBUG);
+        .with_target("krust", Level::TRACE);
     tracing_subscriber::registry()
         .with(HierarchicalLayer::new(2))
         .with(EnvFilter::from_default_env())
@@ -63,6 +63,8 @@ fn main() -> Result<(), ()> {
 
     app.set_accelerators_for_action::<QuitAction>(&["<Control>q"]);
 
+    setup_shortcuts(&app);
+
     let app = RelmApp::from_app(app);
     app.set_global_css(include_str!("styles.css"));
     info!("running application");
@@ -70,4 +72,9 @@ fn main() -> Result<(), ()> {
     info!("main loop exited");
 
     Ok(())
+}
+
+pub fn setup_shortcuts(_app: &gtk::Application) {
+    info!("registering application shortcuts...");
+    // app.set_accelerators_for_action::<MessagesSearchAction>(&["<Enter>"]);
 }
