@@ -12,10 +12,10 @@ license-file = "LICENSE.md"
 
 [dependencies]
 anyhow = "1.0.51"
-gtk = { version = "0.8.1", package = "gtk4", features = ["v4_10"] }
-adw = { version = "0.6.0", package = "libadwaita", features = ["v1_3"] }
-relm4 = { version = "0.8.1", features = ["libadwaita"] }
-relm4-components = "0.8.1"
+gtk = { version = "0.8.1", package = "gtk4", features = ["v4_14"] }
+adw = { version = "0.6.0", package = "libadwaita", features = ["v1_5"] }
+relm4 = { version = "0.8.1", features = ["libadwaita", "gnome_46"] }
+relm4-components = { version = "0.8.1", features = ["libadwaita"]}
 tokio = { version = "1.37.0", features = ["full"] }
 tokio-util = "0.7.10"
 rusqlite = { version = "0.31.0", features = ["bundled"] }

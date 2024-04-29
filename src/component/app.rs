@@ -2,10 +2,7 @@
 
 use gtk::{glib, prelude::*};
 use relm4::{
-    actions::{RelmAction, RelmActionGroup},
-    factory::FactoryVecDeque,
-    main_application,
-    prelude::*,
+    actions::{RelmAction, RelmActionGroup}, factory::FactoryVecDeque, main_adw_application, prelude::*
 };
 use relm4_components::alert::{Alert, AlertMsg, AlertResponse, AlertSettings};
 use tracing::{error, info, warn};
@@ -83,7 +80,7 @@ impl Component for AppModel {
     }
 
     view! {
-        main_window = adw::ApplicationWindow::new(&main_application()) {
+        main_window = adw::ApplicationWindow::new(&main_adw_application()) {
             set_visible: true,
             set_title: Some("KRust Kafka Client"),
             set_icon_name: Some("krust-icon"),

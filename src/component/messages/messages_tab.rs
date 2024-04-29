@@ -9,6 +9,7 @@ use gtk::{
     gdk::{DisplayManager, Rectangle},
     ColumnViewSorter,
 };
+use adw::prelude::*;
 use relm4::{
     actions::{RelmAction, RelmActionGroup},
     factory::{DynamicIndex, FactoryComponent},
@@ -41,7 +42,7 @@ use crate::{
     Repository, DATE_TIME_FORMAT,
 };
 
-use super::lists::MessageKeyColumn;
+use super::{lists::MessageKeyColumn, messages_send_dialog::MessagesSendDialogModel};
 
 // page actions
 relm4::new_action_group!(pub MessagesPageActionGroup, "messages_page");
@@ -66,6 +67,7 @@ pub struct MessagesTabModel {
     fetch_type: KafkaFetch,
     max_messages: f64,
     messages_menu_popover: gtk::PopoverMenu,
+    add_messages: Controller<MessagesSendDialogModel>,
 }
 
 pub struct MessagesTabInit {
@@ -96,6 +98,7 @@ pub enum MessagesTabMsg {
     ToggleMode(bool),
     DigitsOnly(f64),
     CopyMessages(Copy),
+    AddMessages,
 }
 
 #[derive(Debug)]
@@ -126,6 +129,7 @@ impl FactoryComponent for MessagesTabModel {
 
     view! {
         #[root]
+        #[name(main_panel)]
         gtk::Paned {
             set_orientation: gtk::Orientation::Vertical,
             //set_resize_start_child: true,
@@ -168,6 +172,14 @@ impl FactoryComponent for MessagesTabModel {
                             set_margin_start: 5,
                             connect_clicked[sender] => move |_| {
                                 sender.input(MessagesTabMsg::RefreshMessages);
+                            },
+                        },
+                        #[name(btn_send_messages)]
+                        gtk::Button {
+                            set_icon_name: "list-add-symbolic",
+                            set_margin_start: 5,
+                            connect_clicked[sender] => move |_| {
+                                sender.input(MessagesTabMsg::AddMessages);
                             },
                         },
                         #[name(btn_cache_toggle)]
@@ -459,6 +471,12 @@ impl FactoryComponent for MessagesTabModel {
         messages_actions.add_action(menu_copy_value_action);
         messages_actions.add_action(menu_copy_key_action);
         messages_actions.register_for_widget(&messages_popover_menu);
+
+        let add_messages = MessagesSendDialogModel::builder()
+        //.transient_for(main_application())
+        .launch((Some(open.connection.clone()), Some(open.topic.clone())))
+        .detach();
+
         let model = MessagesTabModel {
             token: CancellationToken::new(),
             mode: MessagesMode::Live,
@@ -472,6 +490,7 @@ impl FactoryComponent for MessagesTabModel {
             fetch_type: KafkaFetch::default(),
             max_messages: 1000.0,
             messages_menu_popover: messages_popover_menu,
+            add_messages: add_messages,
         };
         let messages_view = &model.messages_wrapper.view;
         let _headers_view = &model.headers_wrapper.view;
@@ -564,6 +583,10 @@ impl FactoryComponent for MessagesTabModel {
         sender: FactorySender<Self>,
     ) {
         match msg {
+            MessagesTabMsg::AddMessages => {
+                let parent = &widgets.main_panel;
+                self.add_messages.widget().present(parent);
+            }
             MessagesTabMsg::DigitsOnly(value) => {
                 self.max_messages = value;
                 info!("Max messages:{}", self.max_messages);

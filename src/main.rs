@@ -1,5 +1,7 @@
+#![windows_subsystem = "windows"]
+use std::env;
+
 use gtk::gdk;
-//#![windows_subsystem = "windows"]
 use gtk::prelude::ApplicationExt;
 use gtk::gio;
 use tracing::*;
@@ -27,8 +29,6 @@ fn initialize_resources() {
 }
 
 fn main() -> Result<(), ()> {
-    // Call `gtk::init` manually because we instantiate GTK types in the app model.
-    gtk::init().expect("should initialize GTK");
     let filter = filter::Targets::new()
         // Enable the `INFO` level for anything in `my_crate`
         .with_target("relm4", Level::WARN)
@@ -39,6 +39,13 @@ fn main() -> Result<(), ()> {
         .with(EnvFilter::from_default_env())
         .with(filter)
         .init();
+
+    let gsk_renderer_var = "GSK_RENDERER";
+    info!("GSK_RENDERER[before]::{:?}", env::var(gsk_renderer_var));
+    env::set_var(gsk_renderer_var, "cairo");
+    info!("GSK_RENDERER[after]::{:?}", env::var(gsk_renderer_var));
+    // Call `gtk::init` manually because we instantiate GTK types in the app model.
+    gtk::init().expect("should initialize GTK");
 
     info!("starting application: {}", APP_ID);
     initialize_resources();
