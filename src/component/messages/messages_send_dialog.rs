@@ -88,6 +88,7 @@ impl Component for MessagesSendDialogModel {
                         partitions_combo -> adw::ComboRow {
                             set_title: "Partition",
                             set_subtitle: "Select target topic partition",
+                            set_use_subtitle: true,
                         },
                         #[name(toggle_multiple_messages)]
                         adw::SwitchRow {

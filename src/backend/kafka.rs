@@ -263,7 +263,8 @@ impl KafkaBackend {
             .collect::<Vec<_>>();
         // This loop will wait until all delivery statuses have been received.
         for future in messages_futures {
-            info!("Future completed. Result: {:?}", future.await);
+            let result = future.await;
+            info!("Future completed. Result: {:?}", result);
         }
     }
 
