@@ -222,7 +222,7 @@ impl Component for AppModel {
             });
 
         let messages_page: Controller<MessagesPageModel> =
-            MessagesPageModel::builder().launch(()).detach();
+            MessagesPageModel::builder().priority(glib::Priority::HIGH_IDLE).launch(()).detach();
 
         let settings_page: Controller<SettingsPageModel> = SettingsPageModel::builder()
             .launch(())

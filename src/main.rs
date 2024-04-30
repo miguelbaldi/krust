@@ -2,8 +2,8 @@
 use std::env;
 
 use gtk::gdk;
-use gtk::prelude::ApplicationExt;
 use gtk::gio;
+use gtk::prelude::ApplicationExt;
 use tracing::*;
 use tracing_subscriber::filter;
 use tracing_subscriber::prelude::*;
@@ -41,9 +41,18 @@ fn main() -> Result<(), ()> {
         .init();
 
     let gsk_renderer_var = "GSK_RENDERER";
-    info!("GSK_RENDERER[before]::{:?}", env::var(gsk_renderer_var));
-    env::set_var(gsk_renderer_var, "cairo");
-    info!("GSK_RENDERER[after]::{:?}", env::var(gsk_renderer_var));
+    let render = match env::var(gsk_renderer_var) {
+        Ok(render) => {
+            info!("GSK_RENDERER[external]::{}", render);
+            render
+        }
+        Err(_) => {
+            let render = "gl";
+            env::set_var(gsk_renderer_var, render);
+            render.to_string()
+        }
+    };
+    info!("GSK_RENDERER[after]:: intended={}, actual={:?}", render, env::var(gsk_renderer_var));
     // Call `gtk::init` manually because we instantiate GTK types in the app model.
     gtk::init().expect("should initialize GTK");
 
