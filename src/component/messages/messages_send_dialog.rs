@@ -1,5 +1,6 @@
 #![allow(deprecated)]
 use adw::prelude::*;
+use gtk::gdk::DisplayManager;
 use relm4::*;
 use relm4_components::simple_adw_combo_row::{SimpleComboRow, SimpleComboRowMsg};
 use tracing::*;
@@ -71,8 +72,8 @@ impl Component for MessagesSendDialogModel {
         #[root]
         adw::Dialog {
             set_title: "Add messages",
-            set_content_height: 650,
-            set_content_width: 900,
+            set_content_width: dialog_width,
+            set_content_height: dialog_height,
             #[wrap(Some)]
             set_child = &gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
@@ -160,8 +161,8 @@ impl Component for MessagesSendDialogModel {
                                 set_propagate_natural_height: true,
                                 set_overflow: gtk::Overflow::Hidden,
                                 set_valign: gtk::Align::Fill,
-                                //set_height_request: 400,
-                                set_min_content_height: 200,
+                                set_height_request: dialog_height / 2,
+                                //set_min_content_height: 200,
                                 #[name(single_message_value)]
                                 gtk::TextView {
                                     set_vexpand: true,
@@ -205,6 +206,7 @@ impl Component for MessagesSendDialogModel {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
+        let (dialog_width, dialog_height) = MessagesSendDialogModel::get_dialog_max_geometry();
         let (connection, topic) = current_connection.clone();
         let default_idx = 0;
         let partitions_combo = SimpleComboRow::builder()
@@ -258,56 +260,9 @@ impl Component for MessagesSendDialogModel {
             }
             MessagesSendDialogMsg::Send => {
                 if self.is_multiple {
-                    match self.selected_multi_format {
-                        Some(MultiFormat::Key) => {}
-                        Some(MultiFormat::Value) => {}
-                        Some(MultiFormat::KeyValue) => {}
-                        None => {}
-                    }
-                    let alert =adw::AlertDialog::builder()
-                    .heading("Error")
-                    .title("Error")
-                        .body("Sorry, no donuts for you\nUnder construction!")
-                        .close_response("close")
-                        .default_response("close")
-                        .can_close(true)
-                        .receives_default(true)
-                        .build();
-                    alert.add_response("close", "Cancel");
-                    alert.present(root);
+                    self.send_multiple_message(widgets, sender.clone());
                 } else {
-                    let partition = self.selected_partition.unwrap_or(0);
-                    let (start, end) = widgets.single_message_key.buffer().bounds();
-                    let key = widgets
-                        .single_message_key
-                        .buffer()
-                        .text(&start, &end, true)
-                        .to_string();
-                    let key = if !key.is_empty() { Some(key) } else { None };
-                    let (start, end) = widgets.single_message_value.buffer().bounds();
-                    let value = widgets
-                        .single_message_value
-                        .buffer()
-                        .text(&start, &end, true)
-                        .to_string();
-                    let topic = self.topic.clone().unwrap().name;
-                    let message = KrustMessage {
-                        topic: topic.clone(),
-                        partition,
-                        offset: 0,
-                        key,
-                        value,
-                        timestamp: None,
-                        headers: vec![],
-                    };
-                    let connection = self.connection.clone().unwrap();
-                    let messages = vec![message];
-                    sender.oneshot_command(async move {
-                        // Run async background task
-                        let kafka = KafkaBackend::new(&connection);
-                        kafka.send_messages(&topic, &messages).await;
-                        AsyncCommandOutput::SendResult
-                    });
+                    self.send_single_message(widgets, sender.clone());
                 }
             }
             MessagesSendDialogMsg::LoadPartitions => {
@@ -379,6 +334,203 @@ impl Component for MessagesSendDialogModel {
                 widgets.single_message_value.buffer().set_text("");
                 root.close();
             }
+        }
+    }
+}
+
+impl MessagesSendDialogModel {
+    fn get_dialog_max_geometry() -> (i32, i32) {
+        let main_window = main_application().active_window().unwrap();
+        let surface = main_window.surface();
+        if let Some(surface) = surface {
+            if let Some(display) = DisplayManager::get().default_display() {
+                if let Some(monitor) = display.monitor_at_surface(&surface) {
+                    let height = monitor.geometry().height();
+                    let width = monitor.geometry().width();
+                    info!("get_dialog_max_geometry::monitor::resolution::{}x{}", width, height);
+                    let height = ((height as f32) * 0.8).ceil() as i32;
+                    let width = ((width as f32) * 0.8).ceil() as i32;
+                    info!("get_dialog_max_geometry::dialog::resolution::{}x{}", width, height);
+                    return (width, height)
+                }
+            }
+        }
+        (1024, 768)
+    }
+
+    fn send_multiple_message(
+        &mut self,
+        widgets: &mut MessagesSendDialogModelWidgets,
+        sender: ComponentSender<Self>,
+    ) {
+        let selected_multi_format: MultiFormat = self.selected_multi_format.unwrap_or_else(|| {
+            self.multi_format_combo
+            .model()
+            .get_active_elem()
+            .unwrap_or(&MultiFormat::default())
+            .clone()
+        });
+        info!("send_multiple_message::{:?}", self.selected_multi_format);
+        let partition = self.selected_partition.unwrap_or(0);
+        let topic = self.topic.clone().unwrap().name;
+        let messages = match selected_multi_format {
+            MultiFormat::Key => self
+                .get_key(widgets, true)
+                .iter()
+                .map(|k| (k.clone(), String::default()))
+                .collect(),
+            MultiFormat::Value => self
+                .get_value(widgets, true)
+                .iter()
+                .map(|v| (String::default(), v.clone()))
+                .collect(),
+            MultiFormat::KeyValue => self.get_key_value(widgets, true),
+        };
+        let messages: Vec<KrustMessage> = messages
+            .iter()
+            .map(|m| KrustMessage {
+                topic: topic.clone(),
+                partition,
+                offset: 0,
+                key: Some(m.0.clone()),
+                value: m.1.clone(),
+                timestamp: None,
+                headers: vec![],
+            })
+            .collect();
+        debug!("sending messages::{:?}", &messages);
+        let connection = self.connection.clone().unwrap();
+        sender.oneshot_command(async move {
+            // Run async background task
+            let kafka = KafkaBackend::new(&connection);
+            kafka.send_messages(&topic, &messages).await;
+            AsyncCommandOutput::SendResult
+        });
+    }
+    fn get_key(
+        &mut self,
+        widgets: &mut MessagesSendDialogModelWidgets,
+        is_multi: bool,
+    ) -> Vec<String> {
+        info!("get_key");
+        let (start, end) = widgets.single_message_key.buffer().bounds();
+        let key = widgets
+            .single_message_key
+            .buffer()
+            .text(&start, &end, true)
+            .to_string();
+        let key = if !key.trim().is_empty() {
+            Some(key)
+        } else {
+            None
+        };
+        if is_multi {
+            key.map_or(vec![], |text| {
+                text.lines().map(|s| s.to_string()).into_iter().collect()
+            })
+        } else {
+            key.map_or(vec![], |text| vec![text])
+        }
+    }
+    fn get_value(
+        &mut self,
+        widgets: &mut MessagesSendDialogModelWidgets,
+        is_multi: bool,
+    ) -> Vec<String> {
+        info!("get_value");
+        let (start, end) = widgets.single_message_value.buffer().bounds();
+        let key = widgets
+            .single_message_value
+            .buffer()
+            .text(&start, &end, true)
+            .to_string();
+        let key = if !key.trim().is_empty() {
+            Some(key)
+        } else {
+            None
+        };
+        if is_multi {
+            key.map_or(vec![], |text| {
+                text.lines().map(|s| s.to_string()).into_iter().collect()
+            })
+        } else {
+            key.map_or(vec![], |text| vec![text])
+        }
+    }
+    fn get_key_value(
+        &mut self,
+        widgets: &mut MessagesSendDialogModelWidgets,
+        is_multi: bool,
+    ) -> Vec<(String, String)> {
+        info!("get_key_value");
+        let separator = widgets.multiple_key_value_separator.text().to_string();
+        let separator = if separator.trim().is_empty() {
+            ","
+        } else {
+            separator.as_str()
+        };
+        let (start, end) = widgets.single_message_value.buffer().bounds();
+        let key = widgets
+            .single_message_value
+            .buffer()
+            .text(&start, &end, true)
+            .to_string();
+        debug!("get_key_value::value::{}", &key);
+        let key = if !key.trim().is_empty() {
+            Some(key)
+        } else {
+            None
+        };
+        if is_multi {
+            key.map_or(vec![], |text| {
+                text.lines()
+                    .map(|s| {
+                        trace!("get_key_value::line::[separator={}]:{}", separator, s);
+                        let tokenized: Vec<&str> = s.splitn(2, separator).collect();
+                        trace!("get_key_value::tokenized::[{}]::{:?}", tokenized.len(), tokenized);
+                        if tokenized.len() == 2 {
+                            (
+                                tokenized.first().unwrap().to_string(),
+                                tokenized.last().unwrap().to_string(),
+                            )
+                        } else {
+                            ("".to_string(), "".to_string())
+                        }
+                    })
+                    .into_iter()
+                    .collect()
+            })
+        } else {
+            vec![]
+        }
+    }
+    fn send_single_message(
+        &mut self,
+        widgets: &mut MessagesSendDialogModelWidgets,
+        sender: ComponentSender<Self>,
+    ) {
+        let partition = self.selected_partition.unwrap_or(0);
+        let topic = self.topic.clone().unwrap().name;
+        let key = self.get_key(widgets, false);
+        let value = self.get_value(widgets, false);
+        if !value.is_empty() {
+            let message = KrustMessage {
+                topic: topic.clone(),
+                partition,
+                offset: 0,
+                key: key.first().cloned(),
+                value: value.first().unwrap().to_string(),
+                timestamp: None,
+                headers: vec![],
+            };
+            let connection = self.connection.clone().unwrap();
+            let messages = vec![message];
+            sender.oneshot_command(async move {
+                // Run async background task
+                let kafka = KafkaBackend::new(&connection);
+                kafka.send_messages(&topic, &messages).await;
+                AsyncCommandOutput::SendResult
+            });
         }
     }
 }

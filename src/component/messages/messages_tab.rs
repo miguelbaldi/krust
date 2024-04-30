@@ -548,7 +548,8 @@ impl FactoryComponent for MessagesTabModel {
     ) {
         match msg {
             MessagesTabMsg::AddMessages => {
-                let parent = &widgets.main_panel;
+                let parent = &relm4::main_application().active_window().unwrap();
+
                 self.add_messages.widget().present(parent);
             }
             MessagesTabMsg::DigitsOnly(value) => {
