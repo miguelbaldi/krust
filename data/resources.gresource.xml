@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <gresources>
-  <gresource prefix="/org/miguelbaldi/krust/">
+  <gresource prefix="/io/miguelbaldi/KRust/">
+    <file preprocess="xml-stripblanks" alias="icons/scalable/apps/io.miguelbaldi.KRust.svg">images/io.miguelbaldi.KRust.svg</file>
+    <file preprocess="xml-stripblanks" alias="icons/symbolic/apps/io.miguelbaldi.KRust-symbolic.svg">images/io.miguelbaldi.KRust-symbolic.svg</file>
+
     <file alias="logo.png">images/logo.png</file>
     <file preprocess="xml-stripblanks" alias="logo.svg">images/logo.svg</file>
     <file preprocess="xml-stripblanks" alias="logo-no-background.svg">images/logo-no-background.svg</file>

@@ -17,7 +17,7 @@ use crate::{
         topics_page::{TopicsPageModel, TopicsPageMsg, TopicsPageOutput},
     },
     config::State,
-    modals::about::AboutDialog,
+    modals::about::AboutDialog, APP_ID, APP_NAME, APP_RESOURCE_PATH,
 };
 
 use super::{
@@ -82,8 +82,8 @@ impl Component for AppModel {
     view! {
         main_window = adw::ApplicationWindow::new(&main_adw_application()) {
             set_visible: true,
-            set_title: Some("KRust Kafka Client"),
-            set_icon_name: Some("krust-icon"),
+            set_title: Some(APP_NAME),
+            set_icon_name: Some(APP_ID),
             gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
 
@@ -236,7 +236,7 @@ impl Component for AppModel {
         info!("widgets loaded");
         widgets
             .support_logo
-            .set_resource(Some("/org/miguelbaldi/krust/logo.png"));
+            .set_resource(Some(format!("{}logo.png", APP_RESOURCE_PATH).as_str()));
 
         let mut actions = RelmActionGroup::<WindowActionGroup>::new();
 

@@ -1,4 +1,6 @@
+use anyhow::Result;
 use std::{env, path::Path, process::Command};
+use vergen::EmitBuilder;
 
 // rustdoc-stripper-ignore-next
 /// Call to run `glib-compile-resources` to generate compiled gresources to embed
@@ -54,8 +56,7 @@ pub fn compile_resources<P: AsRef<Path>>(source_dirs: &[P], gresource: &str, tar
     }
 }
 
-
-fn main() {
+fn main() -> Result<()>{
     compile_resources(
         &["data"],
         "data/resources.gresource.xml",
@@ -66,4 +67,12 @@ fn main() {
         "data/icons.gresource.xml",
         "icons.gresource",
     );
+
+    EmitBuilder::builder()
+        .all_build()
+        .all_git()
+        .all_sysinfo()
+        .fail_on_error()
+        .emit()?;
+    Ok(())
 }

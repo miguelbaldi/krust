@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <gresources>
-  <gresource prefix="/org/miguelbaldi/krust/icons/">
+  <gresource prefix="/io/miguelbaldi/KRust/icons/">
     <file alias="krust-icon.ico">images/krust.ico</file>
   </gresource>
 </gresources>

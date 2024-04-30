@@ -209,6 +209,7 @@ impl FactoryComponent for MessagesTabModel {
                         gtk::SearchEntry {
                             set_hexpand: false,
                             set_halign: gtk::Align::Fill,
+                            set_width_chars: 50,
                             connect_search_changed[sender] => move |entry| {
                                 sender.clone().input(MessagesTabMsg::LiveSearchMessages(entry.text().to_string()));
                             },
@@ -593,6 +594,7 @@ impl FactoryComponent for MessagesTabModel {
                 };
                 self.page_size = page_size;
                 self.page_size_combo.widget().queue_allocate();
+                sender.input(MessagesTabMsg::SearchMessages);
             }
             MessagesTabMsg::FetchTypeChanged(_idx) => {
                 let fetch_type = match self.fetch_type_combo.model().get_active_elem() {
@@ -633,13 +635,6 @@ impl FactoryComponent for MessagesTabModel {
                         CommandMsg::CopyToClipboard(String::default())
                     }
                 });
-                // if let Ok(data) = data {
-                //     DisplayManager::get()
-                //         .default_display()
-                //         .unwrap()
-                //         .clipboard()
-                //         .set_text(data.as_str());
-                // }
             }
             MessagesTabMsg::Open(connection, topic) => {
                 let conn_id = &connection.id.unwrap();
@@ -993,11 +988,15 @@ fn fill_pagination(
         }
         (_, _) => (),
     }
-    debug!("fill pagination of current page {}", current_page);
+    debug!("fill pagination of current page {} of {}", current_page, pages);
     match current_page {
-        1 => {
+        1 if pages == 1 => {
+            widgets.btn_next_page.set_sensitive(false);
             widgets.btn_previous_page.set_sensitive(false);
+        }
+        1 => {
             widgets.btn_next_page.set_sensitive(true);
+            widgets.btn_previous_page.set_sensitive(false);
         }
         n if n >= pages => {
             widgets.btn_next_page.set_sensitive(false);

@@ -125,7 +125,9 @@ impl RelmColumn for FavouriteColumn {
     const ENABLE_EXPAND: bool = false;
 
     fn setup(_item: &gtk::ListItem) -> (Self::Root, Self::Widgets) {
-        let button = gtk::CheckButton::builder().css_name("btn-favourite").build();
+        let button = gtk::CheckButton::builder()
+            .css_name("btn-favourite")
+            .build();
         (button, ())
     }
 
@@ -165,6 +167,7 @@ pub enum TopicsPageMsg {
     Search(String),
     FavouriteToggled { topic_name: String, is_active: bool },
     ToggleFavouritesFilter(bool),
+    RefreshTopics,
 }
 
 #[derive(Debug)]
@@ -218,6 +221,7 @@ impl Component for TopicsPageModel {
                     set_orientation: gtk::Orientation::Horizontal,
                     #[name(topics_search_entry)]
                     gtk::SearchEntry {
+                        set_width_chars: 50,
                         connect_search_changed[sender] => move |entry| {
                             sender.clone().input(TopicsPageMsg::Search(entry.text().to_string()));
                         },
@@ -229,6 +233,18 @@ impl Component for TopicsPageModel {
                         add_css_class: "krust-toggle",
                         connect_toggled[sender] => move |btn| {
                             sender.input(TopicsPageMsg::ToggleFavouritesFilter(btn.is_active()));
+                        },
+                    },
+                },
+                #[wrap(Some)]
+                set_end_widget = &gtk::Box {
+                    set_orientation: gtk::Orientation::Horizontal,
+                    #[name(btn_refresh)]
+                    gtk::Button {
+                        set_icon_name: "media-playlist-repeat-symbolic",
+                        set_margin_start: 5,
+                        connect_clicked[sender] => move |_| {
+                            sender.input(TopicsPageMsg::RefreshTopics);
                         },
                     },
                 },
@@ -260,9 +276,9 @@ impl Component for TopicsPageModel {
         view_wrapper.append_column::<NameColumn>();
         view_wrapper.append_column::<PartitionCountColumn>();
 
-         // Add a filter and disable it
-         view_wrapper.add_filter(|item| item.favourite );
-         view_wrapper.set_filter_status(0, false);
+        // Add a filter and disable it
+        view_wrapper.add_filter(|item| item.favourite);
+        view_wrapper.set_filter_status(0, false);
 
         let model = TopicsPageModel {
             current,
@@ -290,6 +306,11 @@ impl Component for TopicsPageModel {
         _: &Self::Root,
     ) {
         match msg {
+            TopicsPageMsg::RefreshTopics => {
+                if let Some(connection) = self.current.clone() {
+                    sender.input(TopicsPageMsg::List(connection));
+                }
+            }
             TopicsPageMsg::Search(term) => {
                 self.topics_wrapper.clear_filters();
                 let search_term = term.clone();
@@ -362,7 +383,7 @@ impl Component for TopicsPageModel {
             TopicsPageMsg::ToggleFavouritesFilter(is_active) => {
                 if is_active {
                     self.topics_wrapper.clear_filters();
-                    self.topics_wrapper.add_filter(|item| item.favourite );
+                    self.topics_wrapper.add_filter(|item| item.favourite);
                 } else {
                     self.topics_wrapper.clear_filters();
                 }

@@ -3,7 +3,9 @@ use std::env;
 
 use gtk::gdk;
 use gtk::gio;
+use gtk::gio::ApplicationFlags;
 use gtk::prelude::ApplicationExt;
+use krust::APP_RESOURCE_PATH;
 use tracing::*;
 use tracing_subscriber::filter;
 use tracing_subscriber::prelude::*;
@@ -12,7 +14,7 @@ use tracing_tree::HierarchicalLayer;
 
 use relm4::{
     actions::{AccelsPlus, RelmAction, RelmActionGroup},
-    gtk, main_application, RelmApp,
+    gtk, RelmApp,
 };
 
 use krust::{AppModel, Repository, APP_ID};
@@ -58,8 +60,9 @@ fn main() -> Result<(), ()> {
 
     info!("starting application: {}", APP_ID);
     initialize_resources();
-    gtk::Window::set_default_icon_name("krust-icon");
-    let app = main_application();
+    gtk::Window::set_default_icon_name(APP_ID);
+    let app = adw::Application::new(Some(APP_ID), ApplicationFlags::NON_UNIQUE);
+    app.set_resource_base_path(Some(APP_RESOURCE_PATH));
     app.connect_startup(|_| {
         info!("initializing database");
         let mut repo = Repository::new();
@@ -90,7 +93,7 @@ fn main() -> Result<(), ()> {
     Ok(())
 }
 
-pub fn setup_shortcuts(_app: &gtk::Application) {
+pub fn setup_shortcuts(_app: &adw::Application) {
     info!("registering application shortcuts...");
     // app.set_accelerators_for_action::<MessagesSearchAction>(&["<Enter>"]);
 }
