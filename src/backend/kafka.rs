@@ -245,6 +245,7 @@ impl KafkaBackend {
                 let delivery_status = producer
                     .send(
                         FutureRecord::to(topic)
+                            .partition(message.partition)
                             .payload(&message.value)
                             .key(&message.key.clone().unwrap_or_default()),
                         // .headers(OwnedHeaders::new().insert(Header {
