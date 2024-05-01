@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - name: Fix tag reference (workaround for https://github.com/actions/checkout/issues/290)
+      run: git fetch --update-head-ok -f origin ${{ github.ref }}:${{ github.ref }}
     - name: Build
       run: docker-compose up
     - name: Upload Artifact
@@ -24,6 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - name: Fix tag reference (workaround for https://github.com/actions/checkout/issues/290)
+      run: git fetch --update-head-ok -f origin ${{ github.ref }}:${{ github.ref }}
     - name: Build (Windows)
       run: docker-compose -f docker-compose.windows.yml up
     - name: Make Windows Installer
