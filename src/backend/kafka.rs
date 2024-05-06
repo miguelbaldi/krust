@@ -123,7 +123,6 @@ impl KafkaBackend {
                     .set("enable.partition.eof", "false")
                     .set("session.timeout.ms", "6000")
                     .set("enable.auto.commit", "false")
-                    .set("message.timeout.ms", "5000")
                     //.set("statistics.interval.ms", "30000")
                     .set("auto.offset.reset", "earliest")
                     .set("security.protocol", self.config.security_type.to_string())
@@ -150,7 +149,6 @@ impl KafkaBackend {
                     .set("enable.partition.eof", "false")
                     .set("session.timeout.ms", "6000")
                     .set("enable.auto.commit", "false")
-                    .set("message.timeout.ms", "5000")
                     //.set("statistics.interval.ms", "30000")
                     .set("auto.offset.reset", "earliest")
                     .create_with_context::<C, T>(context)
@@ -295,7 +293,15 @@ impl KafkaBackend {
         for p in partitions {
             if !cpartitions.is_empty() {
                 let low = match part_map.get(&p.id) {
-                    Some(part) => part.offset_high.unwrap_or(p.offset_low.unwrap()),
+                    Some(part) => {
+                        let o = part.offset_high.unwrap_or(p.offset_low.unwrap());
+                        let o = if o < p.offset_low.unwrap() {
+                            p.offset_low.unwrap()
+                        } else {
+                            o
+                        };
+                        o
+                    }
                     None => {
                         result.push(Partition {
                             id: p.id,

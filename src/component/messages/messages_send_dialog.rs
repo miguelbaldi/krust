@@ -47,12 +47,14 @@ pub struct MessagesSendDialogModel {
 
 #[derive(Debug)]
 pub enum MessagesSendDialogMsg {
+    Show,
     PartitionSelected(usize),
     LoadPartitions,
     ToggleMultipleMessages(bool),
     MultiFormatSelected(usize),
     Cancel,
     Send,
+    RecalculateDialogSize,
 }
 
 #[derive(Debug)]
@@ -70,10 +72,10 @@ impl Component for MessagesSendDialogModel {
 
     view! {
         #[root]
-        adw::Dialog {
+        main_dialog = adw::Dialog {
             set_title: "Add messages",
-            set_content_width: dialog_width,
-            set_content_height: dialog_height,
+            // set_content_width: dialog_width,
+            // set_content_height: dialog_height,
             #[wrap(Some)]
             set_child = &gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
@@ -117,27 +119,22 @@ impl Component for MessagesSendDialogModel {
                     adw::PreferencesGroup {
                         set_title: "Key",
                         set_margin_top: 10,
-                        set_vexpand: true,
+                        set_vexpand: false,
                         set_hexpand: true,
-                        adw::ActionRow {
-                            set_title: "Key",
-                            set_subtitle: "Key text goes here",
-                            //set_activatable_widget: Some(&single_message_text),
-                            #[wrap(Some)]
-                            set_child: single_message_key_container = &gtk::ScrolledWindow {
-                                set_vexpand: true,
-                                set_hexpand: true,
-                                set_propagate_natural_height: true,
-                                set_overflow: gtk::Overflow::Hidden,
-                                set_valign: gtk::Align::Fill,
-                                #[name(single_message_key)]
-                                gtk::TextView {
-                                    set_top_margin: 5,
-                                    set_left_margin: 5,
-                                    set_height_request: 200,
-                                    set_monospace: true,
-                                    add_css_class: "message-textview",
-                                },
+                        #[name(single_message_key_container)]
+                        gtk::ScrolledWindow {
+                            set_vexpand: false,
+                            set_hexpand: true,
+                            set_propagate_natural_height: true,
+                            set_overflow: gtk::Overflow::Hidden,
+                            set_valign: gtk::Align::Start,
+                            add_css_class: "entry",
+                            #[name(single_message_key)]
+                            gtk::TextView {
+                                set_top_margin: 5,
+                                set_left_margin: 5,
+                                set_monospace: true,
+                                add_css_class: "message-textview",
                             },
                         },
                     },
@@ -147,30 +144,24 @@ impl Component for MessagesSendDialogModel {
                         set_margin_top: 10,
                         set_vexpand: true,
                         set_hexpand: true,
-                        set_valign: gtk::Align::Fill,
+                        set_valign: gtk::Align::BaselineFill,
                         add_css_class: "message-group",
-                        adw::ActionRow {
-                            set_title: "Message",
-                            set_subtitle: "Message text goes here",
+                        #[name(single_message_value_container)]
+                        gtk::ScrolledWindow {
                             set_vexpand: true,
-                            //set_activatable_widget: Some(&single_message_text),
-                            #[wrap(Some)]
-                            set_child: single_message_value_container = &gtk::ScrolledWindow {
-                                set_vexpand: true,
-                                set_hexpand: true,
-                                set_propagate_natural_height: true,
-                                set_overflow: gtk::Overflow::Hidden,
+                            set_hexpand: true,
+                            set_propagate_natural_height: true,
+                            set_overflow: gtk::Overflow::Hidden,
+                            set_valign: gtk::Align::Fill,
+                            add_css_class: "entry",
+                            #[name(single_message_value)]
+                            gtk::TextView {
                                 set_valign: gtk::Align::Fill,
-                                set_height_request: dialog_height / 2,
-                                //set_min_content_height: 200,
-                                #[name(single_message_value)]
-                                gtk::TextView {
-                                    set_vexpand: true,
-                                    set_monospace: true,
-                                    set_top_margin: 5,
-                                    set_left_margin: 5,
-                                    add_css_class: "message-textview",
-                                },
+                                set_vexpand: true,
+                                set_monospace: true,
+                                set_top_margin: 5,
+                                set_left_margin: 5,
+                                add_css_class: "message-textview",
                             },
                         },
                     },
@@ -206,7 +197,6 @@ impl Component for MessagesSendDialogModel {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let (dialog_width, dialog_height) = MessagesSendDialogModel::get_dialog_max_geometry();
         let (connection, topic) = current_connection.clone();
         let default_idx = 0;
         let partitions_combo = SimpleComboRow::builder()
@@ -239,7 +229,31 @@ impl Component for MessagesSendDialogModel {
         };
         let partitions_combo = model.partitions_combo.widget();
         let multi_format_combo = model.multi_format_combo.widget();
-        //let security_type_combo = model.security_type_combo.widget();
+
+        let window = &relm4::main_application().active_window().unwrap();
+        // When the window is maximised or tiled
+        let connect_sender = sender.clone();
+        window.connect_maximized_notify(move |window| {
+            let width = window.width();
+            let height = window.height();
+            info!("window_maximized_notify::{}x{}", width, height);
+            connect_sender.input(MessagesSendDialogMsg::RecalculateDialogSize);
+        });
+        let connect_sender = sender.clone();
+        window.connect_fullscreened_notify(move |window| {
+            let width = window.width();
+            let height = window.height();
+            info!("window_fullscreened_notify::{}x{}", width, height);
+            connect_sender.input(MessagesSendDialogMsg::RecalculateDialogSize);
+        });
+        // When the user manually drags the border of the window
+        let connect_sender = sender.clone();
+        window.connect_default_height_notify(move |window| {
+            let width = window.width();
+            let height = window.height();
+            info!("default_height_notify::{}x{}", width, height);
+            connect_sender.input(MessagesSendDialogMsg::RecalculateDialogSize);
+        });
         let widgets = view_output!();
         sender.input(MessagesSendDialogMsg::LoadPartitions);
         ComponentParts { model, widgets }
@@ -255,6 +269,22 @@ impl Component for MessagesSendDialogModel {
         info!("received message: {:?}", msg);
 
         match msg {
+            MessagesSendDialogMsg::RecalculateDialogSize => {
+                let (dialog_width, dialog_height) =
+                    MessagesSendDialogModel::get_dialog_max_geometry();
+                root.set_content_height(dialog_height);
+                root.set_content_width(dialog_width);
+                root.queue_allocate();
+            }
+            MessagesSendDialogMsg::Show => {
+                let parent = &relm4::main_application().active_window().unwrap();
+                let (dialog_width, dialog_height) =
+                    MessagesSendDialogModel::get_dialog_max_geometry();
+                root.set_content_height(dialog_height);
+                root.set_content_width(dialog_width);
+                root.queue_allocate();
+                root.present(parent);
+            }
             MessagesSendDialogMsg::Cancel => {
                 root.close();
             }
@@ -340,22 +370,46 @@ impl Component for MessagesSendDialogModel {
 
 impl MessagesSendDialogModel {
     fn get_dialog_max_geometry() -> (i32, i32) {
+        let (w_width, w_height) = MessagesSendDialogModel::get_display_resolution();
+        info!(
+            "get_dialog_max_geometry::dialog::window::{}x{}",
+            w_width, w_height
+        );
+        let height = ((w_height as f32) * 0.9).ceil() as i32;
+        let width = ((w_width as f32) * 0.9).ceil() as i32;
+
+        info!("get_dialog_max_geometry::result::{}x{}", width, height);
+        (width, height)
+    }
+    fn get_display_resolution() -> (i32, i32) {
+        let default_geometry = (1024, 768);
         let main_window = main_application().active_window().unwrap();
         let surface = main_window.surface();
-        if let Some(surface) = surface {
+        let resolution_based = if let Some(surface) = surface {
             if let Some(display) = DisplayManager::get().default_display() {
                 if let Some(monitor) = display.monitor_at_surface(&surface) {
                     let height = monitor.geometry().height();
                     let width = monitor.geometry().width();
-                    info!("get_dialog_max_geometry::monitor::resolution::{}x{}", width, height);
-                    let height = ((height as f32) * 0.8).ceil() as i32;
-                    let width = ((width as f32) * 0.8).ceil() as i32;
-                    info!("get_dialog_max_geometry::dialog::resolution::{}x{}", width, height);
-                    return (width, height)
+                    info!(
+                        "get_display_resolution::monitor::resolution::{}x{}",
+                        width, height
+                    );
+                    (width, height)
+                } else {
+                    default_geometry
                 }
+            } else {
+                default_geometry
             }
-        }
-        (1024, 768)
+        } else {
+            default_geometry
+        };
+
+        info!(
+            "get_display_resolution::result::{}x{}",
+            resolution_based.0, resolution_based.1
+        );
+        resolution_based
     }
 
     fn send_multiple_message(
@@ -365,10 +419,10 @@ impl MessagesSendDialogModel {
     ) {
         let selected_multi_format: MultiFormat = self.selected_multi_format.unwrap_or_else(|| {
             self.multi_format_combo
-            .model()
-            .get_active_elem()
-            .unwrap_or(&MultiFormat::default())
-            .clone()
+                .model()
+                .get_active_elem()
+                .unwrap_or(&MultiFormat::default())
+                .clone()
         });
         info!("send_multiple_message::{:?}", self.selected_multi_format);
         let partition = self.selected_partition.unwrap_or(0);
@@ -487,7 +541,11 @@ impl MessagesSendDialogModel {
                     .map(|s| {
                         trace!("get_key_value::line::[separator={}]:{}", separator, s);
                         let tokenized: Vec<&str> = s.splitn(2, separator).collect();
-                        trace!("get_key_value::tokenized::[{}]::{:?}", tokenized.len(), tokenized);
+                        trace!(
+                            "get_key_value::tokenized::[{}]::{:?}",
+                            tokenized.len(),
+                            tokenized
+                        );
                         if tokenized.len() == 2 {
                             (
                                 tokenized.first().unwrap().to_string(),

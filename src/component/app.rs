@@ -13,8 +13,7 @@ use crate::{
         connection_list::KrustConnectionOutput,
         connection_page::{ConnectionPageModel, ConnectionPageMsg, ConnectionPageOutput},
         settings_page::{SettingsPageModel, SettingsPageMsg, SettingsPageOutput},
-        status_bar::{StatusBarModel, STATUS_BROKER},
-        topics_page::{TopicsPageModel, TopicsPageMsg, TopicsPageOutput},
+        status_bar::{StatusBarModel, STATUS_BROKER}, topics::topics_page::{TopicsPageMsg, TopicsPageOutput},
     },
     config::State,
     modals::about::AboutDialog, APP_ID, APP_NAME, APP_RESOURCE_PATH,
@@ -22,7 +21,7 @@ use crate::{
 
 use super::{
     connection_list::ConnectionListModel,
-    messages::messages_page::{MessagesPageModel, MessagesPageMsg},
+    messages::messages_page::{MessagesPageModel, MessagesPageMsg}, topics::topics_page::TopicsPageModel,
 };
 
 #[derive(Debug)]
@@ -157,7 +156,7 @@ impl Component for AppModel {
                                 add_child = connection_page.widget() -> &gtk::Grid {} -> {
                                     set_name: "Connection",
                                 },
-                                add_child = topics_page.widget() -> &gtk::Box {} -> {
+                                add_child = topics_page.widget() -> &adw::TabOverview {} -> {
                                     set_name: "Topics",
                                     set_title: "Topics",
                                 },
@@ -362,7 +361,7 @@ impl Component for AppModel {
             }
             AppMsg::ShowTopicsPage(conn) => {
                 info!("|-->Show edit connection page for {:?}", conn);
-                self.topics_page.emit(TopicsPageMsg::List(conn));
+                self.topics_page.emit(TopicsPageMsg::Open(conn));
                 widgets.main_stack.set_visible_child_name("Topics");
             }
             AppMsg::ShowTopicsPageByIndex(idx) => {
@@ -383,7 +382,7 @@ impl Component for AppModel {
                         "|-->Show edit connection page for index {:?} - {:?}",
                         idx, conn
                     );
-                    self.topics_page.emit(TopicsPageMsg::List(conn));
+                    self.topics_page.emit(TopicsPageMsg::Open(conn));
                     widgets.main_stack.set_visible_child_name("Topics");
                 } else {
                     widgets.main_stack.set_visible_child_name("Home");

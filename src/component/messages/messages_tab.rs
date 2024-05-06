@@ -1,7 +1,6 @@
 #![allow(deprecated)]
 use std::borrow::Borrow;
 
-use adw::prelude::AdwDialogExt;
 // See: https://gitlab.gnome.org/GNOME/gtk/-/issues/5644
 use chrono::{TimeZone, Utc};
 use chrono_tz::America;
@@ -41,6 +40,7 @@ use crate::{
 };
 
 use super::message_viewer::{MessageViewerModel, MessageViewerMsg};
+use super::messages_send_dialog::MessagesSendDialogMsg;
 use super::{lists::MessageKeyColumn, messages_send_dialog::MessagesSendDialogModel};
 
 // page actions
@@ -549,9 +549,7 @@ impl FactoryComponent for MessagesTabModel {
     ) {
         match msg {
             MessagesTabMsg::AddMessages => {
-                let parent = &relm4::main_application().active_window().unwrap();
-
-                self.add_messages.widget().present(parent);
+                self.add_messages.emit(MessagesSendDialogMsg::Show);
             }
             MessagesTabMsg::DigitsOnly(value) => {
                 self.max_messages = value;
