@@ -2,10 +2,7 @@
 
 use gtk::{glib, prelude::*};
 use relm4::{
-    actions::{RelmAction, RelmActionGroup},
-    factory::FactoryVecDeque,
-    main_application,
-    prelude::*,
+    actions::{RelmAction, RelmActionGroup}, factory::FactoryVecDeque, main_adw_application, prelude::*
 };
 use relm4_components::alert::{Alert, AlertMsg, AlertResponse, AlertSettings};
 use tracing::{error, info, warn};
@@ -16,16 +13,15 @@ use crate::{
         connection_list::KrustConnectionOutput,
         connection_page::{ConnectionPageModel, ConnectionPageMsg, ConnectionPageOutput},
         settings_page::{SettingsPageModel, SettingsPageMsg, SettingsPageOutput},
-        status_bar::{StatusBarModel, STATUS_BROKER},
-        topics_page::{TopicsPageModel, TopicsPageMsg, TopicsPageOutput},
+        status_bar::{StatusBarModel, STATUS_BROKER}, topics::topics_page::{TopicsPageMsg, TopicsPageOutput},
     },
     config::State,
-    modals::about::AboutDialog,
+    modals::about::AboutDialog, APP_ID, APP_NAME, APP_RESOURCE_PATH,
 };
 
 use super::{
     connection_list::ConnectionListModel,
-    messages::messages_page::{MessagesPageModel, MessagesPageMsg},
+    messages::messages_page::{MessagesPageModel, MessagesPageMsg}, topics::topics_page::TopicsPageModel,
 };
 
 #[derive(Debug)]
@@ -83,10 +79,10 @@ impl Component for AppModel {
     }
 
     view! {
-        main_window = adw::ApplicationWindow::new(&main_application()) {
+        main_window = adw::ApplicationWindow::new(&main_adw_application()) {
             set_visible: true,
-            set_title: Some("KRust Kafka Client"),
-            set_icon_name: Some("krust-icon"),
+            set_title: Some(APP_NAME),
+            set_icon_name: Some(APP_ID),
             gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
 
@@ -160,7 +156,7 @@ impl Component for AppModel {
                                 add_child = connection_page.widget() -> &gtk::Grid {} -> {
                                     set_name: "Connection",
                                 },
-                                add_child = topics_page.widget() -> &gtk::Box {} -> {
+                                add_child = topics_page.widget() -> &adw::TabOverview {} -> {
                                     set_name: "Topics",
                                     set_title: "Topics",
                                 },
@@ -225,7 +221,7 @@ impl Component for AppModel {
             });
 
         let messages_page: Controller<MessagesPageModel> =
-            MessagesPageModel::builder().launch(()).detach();
+            MessagesPageModel::builder().priority(glib::Priority::HIGH_IDLE).launch(()).detach();
 
         let settings_page: Controller<SettingsPageModel> = SettingsPageModel::builder()
             .launch(())
@@ -239,7 +235,7 @@ impl Component for AppModel {
         info!("widgets loaded");
         widgets
             .support_logo
-            .set_resource(Some("/org/miguelbaldi/krust/logo.png"));
+            .set_resource(Some(format!("{}logo.png", APP_RESOURCE_PATH).as_str()));
 
         let mut actions = RelmActionGroup::<WindowActionGroup>::new();
 
@@ -365,7 +361,7 @@ impl Component for AppModel {
             }
             AppMsg::ShowTopicsPage(conn) => {
                 info!("|-->Show edit connection page for {:?}", conn);
-                self.topics_page.emit(TopicsPageMsg::List(conn));
+                self.topics_page.emit(TopicsPageMsg::Open(conn));
                 widgets.main_stack.set_visible_child_name("Topics");
             }
             AppMsg::ShowTopicsPageByIndex(idx) => {
@@ -386,7 +382,7 @@ impl Component for AppModel {
                         "|-->Show edit connection page for index {:?} - {:?}",
                         idx, conn
                     );
-                    self.topics_page.emit(TopicsPageMsg::List(conn));
+                    self.topics_page.emit(TopicsPageMsg::Open(conn));
                     widgets.main_stack.set_visible_child_name("Topics");
                 } else {
                     widgets.main_stack.set_visible_child_name("Home");

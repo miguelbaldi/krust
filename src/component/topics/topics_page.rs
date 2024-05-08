@@ -1,41 +1,50 @@
-#![allow(deprecated)]
-
-// See: https://gitlab.gnome.org/GNOME/gtk/-/issues/5644
 use crate::{
-    backend::repository::{KrustConnection, KrustTopic},
-    Repository,
+    backend::
+        repository::{KrustConnection, KrustTopic}
+    ,
+    component::topics::topics_tab::{TopicsTabInit, TopicsTabOutput},
 };
-use adw::TabPage;
-use relm4::{actions::RelmAction, factory::FactoryVecDeque, *};
-use sourceview::prelude::*;
-use sourceview5 as sourceview;
-use tracing::info;
+use adw::{prelude::*, TabPage};
+use relm4::{
+    actions::RelmAction, factory::FactoryVecDeque, *
+};
+use tracing::*;
 
-use super::messages_tab::{MessagesTabInit, MessagesTabModel};
+use super::topics_tab::TopicsTabModel;
 
-relm4::new_action_group!(pub(super) TopicTabActionGroup, "topic-tab");
-relm4::new_stateless_action!(pub(super) PinTabAction, TopicTabActionGroup, "toggle-pin");
-relm4::new_stateless_action!(pub(super) CloseTabAction, TopicTabActionGroup, "close");
+relm4::new_action_group!(pub(super) TopicListActionGroup, "topic-list");
+relm4::new_stateless_action!(pub(super) FavouriteAction, TopicListActionGroup, "toggle-favourite");
 
-pub struct MessagesPageModel {
-    topic: Option<KrustTopic>,
-    connection: Option<KrustConnection>,
-    topics: FactoryVecDeque<MessagesTabModel>,
+relm4::new_action_group!(pub(super) ConnectionTabActionGroup, "connection-tab");
+relm4::new_stateless_action!(pub(super) PinTabAction, ConnectionTabActionGroup, "toggle-pin");
+relm4::new_stateless_action!(pub(super) CloseTabAction, ConnectionTabActionGroup, "close");
+
+#[derive(Debug)]
+pub struct TopicsPageModel {
+    pub current: Option<KrustConnection>,
+    pub topics: FactoryVecDeque<TopicsTabModel>,
+    pub is_loading: bool,
+    pub search_text: String,
 }
 
 #[derive(Debug)]
-pub enum MessagesPageMsg {
-    Open(KrustConnection, KrustTopic),
+pub enum TopicsPageMsg {
+    Open(KrustConnection),
     PageAdded(TabPage, i32),
     MenuPageClosed,
     MenuPagePin,
 }
 
+#[derive(Debug)]
+pub enum TopicsPageOutput {
+    OpenMessagesPage(KrustConnection, KrustTopic),
+}
+
 #[relm4::component(pub)]
-impl Component for MessagesPageModel {
-    type Init = ();
-    type Input = MessagesPageMsg;
-    type Output = ();
+impl Component for TopicsPageModel {
+    type Init = Option<KrustConnection>;
+    type Input = TopicsPageMsg;
+    type Output = TopicsPageOutput;
     type CommandOutput = ();
 
     menu! {
@@ -77,13 +86,15 @@ impl Component for MessagesPageModel {
     }
 
     fn init(
-        _: Self::Init,
+        current: Self::Init,
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let topics = FactoryVecDeque::builder()
             .launch(adw::TabView::default())
-            .detach();
+            .forward(sender.output_sender(), |msg| match msg {
+                TopicsTabOutput::OpenMessagesPage(conn, topic) => TopicsPageOutput::OpenMessagesPage(conn, topic),
+            });
 
         let topics_viewer: &adw::TabView = topics.widget();
         topics_viewer.connect_setup_menu(|view, page| {
@@ -93,53 +104,46 @@ impl Component for MessagesPageModel {
         });
         let tabs_sender = sender.clone();
         topics_viewer.connect_page_attached(move |_tab_view, page, n| {
-            tabs_sender.input(MessagesPageMsg::PageAdded(page.clone(), n));
+            tabs_sender.input(TopicsPageMsg::PageAdded(page.clone(), n));
         });
-        // let tabs_sender = sender.clone();
-        // topics_viewer.connect_close_page(move |_tab_view, page| {
-        //     //&topics_viewer.close_page_finish(&page, true);
-        //     tabs_sender.input(MessagesPageMsg::PageClosed(page.clone()));
-        //     true
-        // });
-
 
         let widgets = view_output!();
 
-        let mut topics_tabs_actions = relm4::actions::RelmActionGroup::<TopicTabActionGroup>::new();
+        let mut topics_tabs_actions = relm4::actions::RelmActionGroup::<ConnectionTabActionGroup>::new();
         let tabs_sender = sender.input_sender().clone();
         let close_tab_action = RelmAction::<CloseTabAction>::new_stateless(move |_| {
-            tabs_sender.send(MessagesPageMsg::MenuPageClosed).unwrap();
+            tabs_sender.send(TopicsPageMsg::MenuPageClosed).unwrap();
         });
         let tabs_sender = sender.input_sender().clone();
         let pin_tab_action = RelmAction::<PinTabAction>::new_stateless(move |_| {
-            tabs_sender.send(MessagesPageMsg::MenuPagePin).unwrap();
+            tabs_sender.send(TopicsPageMsg::MenuPagePin).unwrap();
         });
         topics_tabs_actions.add_action(close_tab_action);
         topics_tabs_actions.add_action(pin_tab_action);
         topics_tabs_actions.register_for_widget(&widgets.topics_tabs);
 
-        let model = MessagesPageModel {
-            topic: None,
-            connection: None,
+        let model = TopicsPageModel {
+            current,
             topics: topics,
+            is_loading: false,
+            search_text: String::default(),
         };
-
         ComponentParts { model, widgets }
     }
 
     fn update_with_view(
         &mut self,
         widgets: &mut Self::Widgets,
-        msg: MessagesPageMsg,
+        msg: TopicsPageMsg,
         sender: ComponentSender<Self>,
         _: &Self::Root,
     ) {
         match msg {
-            MessagesPageMsg::Open(connection, topic) => {
+            TopicsPageMsg::Open(connection) => {
                 let mut has_page: Option<(usize, TabPage)> = None;
                 for i in 0..widgets.topics_viewer.n_pages() {
                     let tab = widgets.topics_viewer.nth_page(i);
-                    let title = format!("[{}] {}", connection.name, topic.name);
+                    let title = format!("{}", connection.name);
                     if title == tab.title().to_string() {
                         has_page = Some((i as usize, tab.clone()));
                         break;
@@ -156,39 +160,32 @@ impl Component for MessagesPageModel {
                     }
                     None => {
                         info!("adding new page");
-                        let conn_id = &connection.id.unwrap();
-                        let topic_name = &topic.name.clone();
-                        self.connection = Some(connection);
-                        let mut repo = Repository::new();
-                        let maybe_topic = repo.find_topic(*conn_id, topic_name);
-                        self.topic = maybe_topic.clone().or(Some(topic));
-                        let init = MessagesTabInit {
-                            topic: self.topic.clone().unwrap(),
-                            connection: self.connection.clone().unwrap(),
+                        self.current = Some(connection);
+                        let init = TopicsTabInit {
+                            connection: self.current.clone().unwrap(),
                         };
                         let _index = self.topics.guard().push_front(init);
                     }
                 }
             }
-            MessagesPageMsg::PageAdded(page, index) => {
+            TopicsPageMsg::PageAdded(page, index) => {
                 let tab_model = self.topics.get(index.try_into().unwrap()).unwrap();
                 let title = format!(
-                    "[{}] {}",
-                    tab_model.connection.clone().unwrap().name,
-                    tab_model.topic.clone().unwrap().name
+                    "{}",
+                    tab_model.current.clone().unwrap().name,
                 );
                 page.set_title(title.as_str());
                 page.set_live_thumbnail(true);
                 widgets.topics_viewer.set_selected_page(&page);
             }
-            MessagesPageMsg::MenuPagePin => {
+            TopicsPageMsg::MenuPagePin => {
                 let page = widgets.topics_viewer.selected_page();
                 if let Some(page) = page {
                     let pinned = !page.is_pinned();
                     widgets.topics_viewer.set_page_pinned(&page, pinned);
                 }
             }
-            MessagesPageMsg::MenuPageClosed => {
+            TopicsPageMsg::MenuPageClosed => {
                 let page = widgets.topics_viewer.selected_page();
                 if let Some(page) = page {
                     info!("closing messages page with name {}", page.title());
@@ -198,9 +195,8 @@ impl Component for MessagesPageModel {
                         let tp = topics.get_mut(i);
                         if let Some(tp) = tp {
                             let title = format!(
-                                "[{}] {}",
-                                tp.connection.clone().unwrap().name.clone(),
-                                tp.topic.clone().unwrap().name.clone()
+                                "{}",
+                                tp.current.clone().unwrap().name.clone(),
                             );
                             info!("PageClosed [{}][{}={}]", i, title, page.title());
                             if title.eq(&page.title().to_string()) {
@@ -224,4 +220,5 @@ impl Component for MessagesPageModel {
 
         self.update_view(widgets, sender);
     }
+
 }

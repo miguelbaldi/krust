@@ -1,7 +1,11 @@
+#![windows_subsystem = "windows"]
+use std::env;
+
 use gtk::gdk;
-//#![windows_subsystem = "windows"]
-use gtk::prelude::ApplicationExt;
 use gtk::gio;
+use gtk::gio::ApplicationFlags;
+use gtk::prelude::ApplicationExt;
+use krust::APP_RESOURCE_PATH;
 use tracing::*;
 use tracing_subscriber::filter;
 use tracing_subscriber::prelude::*;
@@ -10,7 +14,7 @@ use tracing_tree::HierarchicalLayer;
 
 use relm4::{
     actions::{AccelsPlus, RelmAction, RelmActionGroup},
-    gtk, main_application, RelmApp,
+    gtk, RelmApp,
 };
 
 use krust::{AppModel, Repository, APP_ID};
@@ -27,8 +31,6 @@ fn initialize_resources() {
 }
 
 fn main() -> Result<(), ()> {
-    // Call `gtk::init` manually because we instantiate GTK types in the app model.
-    gtk::init().expect("should initialize GTK");
     let filter = filter::Targets::new()
         // Enable the `INFO` level for anything in `my_crate`
         .with_target("relm4", Level::WARN)
@@ -40,10 +42,27 @@ fn main() -> Result<(), ()> {
         .with(filter)
         .init();
 
+    let gsk_renderer_var = "GSK_RENDERER";
+    let render = match env::var(gsk_renderer_var) {
+        Ok(render) => {
+            info!("GSK_RENDERER[external]::{}", render);
+            render
+        }
+        Err(_) => {
+            let render = "gl";
+            env::set_var(gsk_renderer_var, render);
+            render.to_string()
+        }
+    };
+    info!("GSK_RENDERER[after]:: intended={}, actual={:?}", render, env::var(gsk_renderer_var));
+    // Call `gtk::init` manually because we instantiate GTK types in the app model.
+    gtk::init().expect("should initialize GTK");
+
     info!("starting application: {}", APP_ID);
     initialize_resources();
-    gtk::Window::set_default_icon_name("krust-icon");
-    let app = main_application();
+    gtk::Window::set_default_icon_name(APP_ID);
+    let app = adw::Application::new(Some(APP_ID), ApplicationFlags::NON_UNIQUE);
+    app.set_resource_base_path(Some(APP_RESOURCE_PATH));
     app.connect_startup(|_| {
         info!("initializing database");
         let mut repo = Repository::new();
@@ -74,7 +93,7 @@ fn main() -> Result<(), ()> {
     Ok(())
 }
 
-pub fn setup_shortcuts(_app: &gtk::Application) {
+pub fn setup_shortcuts(_app: &adw::Application) {
     info!("registering application shortcuts...");
     // app.set_accelerators_for_action::<MessagesSearchAction>(&["<Enter>"]);
 }

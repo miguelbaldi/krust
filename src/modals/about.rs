@@ -1,7 +1,7 @@
 use gtk::prelude::GtkWindowExt;
 use relm4::{adw, gtk, ComponentParts, ComponentSender, SimpleComponent};
 
-use crate::{APP_NAME, VERSION};
+use crate::{APP_ID, APP_NAME, VERSION};
 
 #[derive(Debug)]
 pub struct AboutDialog {}
@@ -14,8 +14,9 @@ impl SimpleComponent for AboutDialog {
     type Root = adw::AboutWindow;
 
     fn init_root() -> Self::Root {
-        adw::AboutWindow::builder()
-            //.application_icon(APP_ID)
+        let about = adw::AboutWindow::builder()
+            //.application_icon("/org/miguelbaldi/krust/logo.png")
+            .application_icon(APP_ID)
             // Insert your license of choice here
             .license_type(gtk::License::MitX11)
             // Insert your website here
@@ -29,7 +30,10 @@ impl SimpleComponent for AboutDialog {
             .developers(vec!["Miguel A. Baldi Hörlle"])
             .designers(vec!["Miguel A. Baldi Hörlle"])
             .hide_on_close(true)
-            .build()
+            .build();
+        let ack = &["Adelar Escobar Vieira", "Francivaldo Napoleão Herculano", "Jessica dos Santos Rodrigues"];
+        about.add_acknowledgement_section(Some("Special thanks to"), ack);
+        about
     }
 
     fn init(

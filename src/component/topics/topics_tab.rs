@@ -11,10 +11,13 @@ use crate::{
 };
 use gtk::{glib::SignalHandlerId, prelude::*};
 use relm4::{
+    factory::{DynamicIndex, FactoryComponent},
     typed_view::column::{LabelColumn, RelmColumn, TypedColumnView},
     *,
 };
 use tracing::{debug, info};
+
+
 
 relm4::new_action_group!(pub(super) TopicListActionGroup, "topic-list");
 relm4::new_stateless_action!(pub(super) FavouriteAction, TopicListActionGroup, "toggle-favourite");
@@ -25,12 +28,12 @@ pub struct TopicListItem {
     name: String,
     partition_count: usize,
     favourite: bool,
-    sender: ComponentSender<TopicsPageModel>,
+    sender: FactorySender<TopicsTabModel>,
     clicked_handler_id: RefCell<Option<SignalHandlerId>>,
 }
 
 impl TopicListItem {
-    fn new(value: KrustTopic, sender: ComponentSender<TopicsPageModel>) -> Self {
+    fn new(value: KrustTopic, sender: FactorySender<TopicsTabModel>) -> Self {
         Self {
             name: value.name,
             partition_count: value.partitions.len(),
@@ -125,7 +128,9 @@ impl RelmColumn for FavouriteColumn {
     const ENABLE_EXPAND: bool = false;
 
     fn setup(_item: &gtk::ListItem) -> (Self::Root, Self::Widgets) {
-        let button = gtk::CheckButton::builder().css_name("btn-favourite").build();
+        let button = gtk::CheckButton::builder()
+            .css_name("btn-favourite")
+            .build();
         (button, ())
     }
 
@@ -135,7 +140,7 @@ impl RelmColumn for FavouriteColumn {
         let sender = item.sender.clone();
         let signal_id = button.connect_toggled(move |b| {
             info!("FavouriteColumn[{}][{}]", &topic_name, b.is_active());
-            sender.input(TopicsPageMsg::FavouriteToggled {
+            sender.input(TopicsTabMsg::FavouriteToggled {
                 topic_name: topic_name.clone(),
                 is_active: b.is_active(),
             });
@@ -150,8 +155,12 @@ impl RelmColumn for FavouriteColumn {
 }
 // Table: end
 
+pub struct TopicsTabInit {
+    pub connection: KrustConnection,
+}
+
 #[derive(Debug)]
-pub struct TopicsPageModel {
+pub struct TopicsTabModel {
     pub current: Option<KrustConnection>,
     pub topics_wrapper: TypedColumnView<TopicListItem, gtk::SingleSelection>,
     pub is_loading: bool,
@@ -159,16 +168,17 @@ pub struct TopicsPageModel {
 }
 
 #[derive(Debug)]
-pub enum TopicsPageMsg {
+pub enum TopicsTabMsg {
     List(KrustConnection),
     OpenTopic(u32),
     Search(String),
     FavouriteToggled { topic_name: String, is_active: bool },
     ToggleFavouritesFilter(bool),
+    RefreshTopics,
 }
 
 #[derive(Debug)]
-pub enum TopicsPageOutput {
+pub enum TopicsTabOutput {
     OpenMessagesPage(KrustConnection, KrustTopic),
 }
 
@@ -178,7 +188,7 @@ pub enum CommandMsg {
     ListFinished(Vec<KrustTopic>),
 }
 
-impl TopicsPageModel {
+impl TopicsTabModel {
     fn fetch_persited_topics(&self) -> Result<HashMap<String, KrustTopic>, ExternalError> {
         let result = if let Some(conn) = self.current.clone() {
             let mut repo = Repository::new();
@@ -196,12 +206,13 @@ impl TopicsPageModel {
     }
 }
 
-#[relm4::component(pub)]
-impl Component for TopicsPageModel {
-    type Init = Option<KrustConnection>;
-    type Input = TopicsPageMsg;
-    type Output = TopicsPageOutput;
+#[relm4::factory(pub)]
+impl FactoryComponent for TopicsTabModel {
+    type Init = TopicsTabInit;
+    type Input = TopicsTabMsg;
+    type Output = TopicsTabOutput;
     type CommandOutput = CommandMsg;
+    type ParentWidget = adw::TabView;
 
     view! {
         #[root]
@@ -218,8 +229,9 @@ impl Component for TopicsPageModel {
                     set_orientation: gtk::Orientation::Horizontal,
                     #[name(topics_search_entry)]
                     gtk::SearchEntry {
+                        set_width_chars: 50,
                         connect_search_changed[sender] => move |entry| {
-                            sender.clone().input(TopicsPageMsg::Search(entry.text().to_string()));
+                            sender.clone().input(TopicsTabMsg::Search(entry.text().to_string()));
                         },
                     },
                     #[name(btn_cache_toggle)]
@@ -228,7 +240,19 @@ impl Component for TopicsPageModel {
                         set_label: "Favourites",
                         add_css_class: "krust-toggle",
                         connect_toggled[sender] => move |btn| {
-                            sender.input(TopicsPageMsg::ToggleFavouritesFilter(btn.is_active()));
+                            sender.input(TopicsTabMsg::ToggleFavouritesFilter(btn.is_active()));
+                        },
+                    },
+                },
+                #[wrap(Some)]
+                set_end_widget = &gtk::Box {
+                    set_orientation: gtk::Orientation::Horizontal,
+                    #[name(btn_refresh)]
+                    gtk::Button {
+                        set_icon_name: "media-playlist-repeat-symbolic",
+                        set_margin_start: 5,
+                        connect_clicked[sender] => move |_| {
+                            sender.input(TopicsTabMsg::RefreshTopics);
                         },
                     },
                 },
@@ -239,8 +263,7 @@ impl Component for TopicsPageModel {
                 set_hexpand: true,
                 set_propagate_natural_width: true,
                 set_vscrollbar_policy: gtk::PolicyType::Always,
-                #[local_ref]
-                topics_view -> gtk::ColumnView {
+                self.topics_wrapper.view.clone() -> gtk::ColumnView {
                     set_vexpand: true,
                     set_hexpand: true,
                     set_show_row_separators: true,
@@ -249,54 +272,53 @@ impl Component for TopicsPageModel {
         }
     }
 
-    fn init(
-        current: Self::Init,
-        root: Self::Root,
-        sender: ComponentSender<Self>,
-    ) -> ComponentParts<Self> {
+    fn init_model(current: Self::Init, _index: &DynamicIndex, sender: FactorySender<Self>) -> Self {
         // Initialize the ListView wrapper
         let mut view_wrapper = TypedColumnView::<TopicListItem, gtk::SingleSelection>::new();
         view_wrapper.append_column::<FavouriteColumn>();
         view_wrapper.append_column::<NameColumn>();
         view_wrapper.append_column::<PartitionCountColumn>();
 
-         // Add a filter and disable it
-         view_wrapper.add_filter(|item| item.favourite );
-         view_wrapper.set_filter_status(0, false);
+        // Add a filter and disable it
+        view_wrapper.add_filter(|item| item.favourite);
+        view_wrapper.set_filter_status(0, false);
+        let connection = current.connection.clone();
 
-        let model = TopicsPageModel {
-            current,
+        let model = TopicsTabModel {
+            current: Some(connection),
             topics_wrapper: view_wrapper,
             is_loading: false,
             search_text: String::default(),
         };
 
         let topics_view = &model.topics_wrapper.view;
-        let snd: ComponentSender<TopicsPageModel> = sender.clone();
+        let snd: FactorySender<TopicsTabModel> = sender.clone();
         topics_view.connect_activate(move |_view, idx| {
-            snd.input(TopicsPageMsg::OpenTopic(idx));
+            snd.input(TopicsTabMsg::OpenTopic(idx));
         });
-
-        let widgets = view_output!();
-
-        ComponentParts { model, widgets }
+        sender.input(TopicsTabMsg::RefreshTopics);
+        model
     }
 
     fn update_with_view(
         &mut self,
         widgets: &mut Self::Widgets,
-        msg: TopicsPageMsg,
-        sender: ComponentSender<Self>,
-        _: &Self::Root,
+        msg: TopicsTabMsg,
+        sender: FactorySender<Self>,
     ) {
         match msg {
-            TopicsPageMsg::Search(term) => {
+            TopicsTabMsg::RefreshTopics => {
+                if let Some(connection) = self.current.clone() {
+                    sender.input(TopicsTabMsg::List(connection));
+                }
+            }
+            TopicsTabMsg::Search(term) => {
                 self.topics_wrapper.clear_filters();
                 let search_term = term.clone();
                 self.topics_wrapper
                     .add_filter(move |item| item.name.contains(search_term.as_str()));
             }
-            TopicsPageMsg::List(conn) => {
+            TopicsTabMsg::List(conn) => {
                 STATUS_BROKER.send(StatusBarMsg::Start);
                 self.topics_wrapper.clear();
                 self.current = Some(conn.clone());
@@ -315,7 +337,7 @@ impl Component for TopicsPageModel {
                     CommandMsg::ListFinished(topics)
                 });
             }
-            TopicsPageMsg::OpenTopic(idx) => {
+            TopicsTabMsg::OpenTopic(idx) => {
                 let item = self.topics_wrapper.get_visible(idx).unwrap();
                 let conn_id = self.current.as_ref().and_then(|c| c.id);
                 let connection = self.current.clone();
@@ -328,13 +350,13 @@ impl Component for TopicsPageModel {
                     favourite: None,
                 };
                 sender
-                    .output(TopicsPageOutput::OpenMessagesPage(
+                    .output(TopicsTabOutput::OpenMessagesPage(
                         connection.unwrap(),
                         topic,
                     ))
                     .unwrap();
             }
-            TopicsPageMsg::FavouriteToggled {
+            TopicsTabMsg::FavouriteToggled {
                 topic_name,
                 is_active,
             } => {
@@ -357,12 +379,12 @@ impl Component for TopicsPageModel {
                     };
                     repo.save_topic(conn_id, &topic).unwrap();
                 }
-                //sender.input(TopicsPageMsg::List(self.current.clone().unwrap()));
+                //sender.input(TopicsTabMsg::List(self.current.clone().unwrap()));
             }
-            TopicsPageMsg::ToggleFavouritesFilter(is_active) => {
+            TopicsTabMsg::ToggleFavouritesFilter(is_active) => {
                 if is_active {
                     self.topics_wrapper.clear_filters();
-                    self.topics_wrapper.add_filter(|item| item.favourite );
+                    self.topics_wrapper.add_filter(|item| item.favourite);
                 } else {
                     self.topics_wrapper.clear_filters();
                 }
@@ -376,8 +398,7 @@ impl Component for TopicsPageModel {
         &mut self,
         widgets: &mut Self::Widgets,
         message: Self::CommandOutput,
-        sender: ComponentSender<Self>,
-        _: &Self::Root,
+        sender: FactorySender<Self>,
     ) {
         match message {
             CommandMsg::ListFinished(topics) => {

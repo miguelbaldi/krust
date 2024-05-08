@@ -1,7 +1,8 @@
 services:
   krust-cross-win:
     # image id: c191618ca6ff
-    image: ghcr.io/mglolenstine/gtk4-cross:rust-gtk-4.12
+    image: ghcr.io/miguelbaldi/gtk4-cross:rust-gtk-4.14
+    #image: gtk4-cross-rust-4.14.3-1.5.0
     volumes:
       - .:/mnt:z
     command: bash -c "./win-prepare-and-build.sh"

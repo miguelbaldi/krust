@@ -2,11 +2,14 @@ use rdkafka::client::ClientContext;
 use rdkafka::config::{ClientConfig, FromClientConfigAndContext, RDKafkaLogLevel};
 use rdkafka::consumer::stream_consumer::StreamConsumer;
 use rdkafka::consumer::{Consumer, ConsumerContext};
-use rdkafka::error::KafkaResult;
+use rdkafka::error::{KafkaError, KafkaResult};
 use rdkafka::message::Headers;
+
+use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::topic_partition_list::TopicPartitionList;
 use rdkafka::{Message, Offset};
 
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, trace, warn};
@@ -63,6 +66,50 @@ impl KafkaBackend {
         }
     }
 
+    fn producer(&self) -> Result<FutureProducer, KafkaError> {
+        let producer: Result<FutureProducer, KafkaError> = match self.config.security_type {
+            KrustConnectionSecurityType::SASL_PLAINTEXT => {
+                ClientConfig::new()
+                    .set("bootstrap.servers", self.config.brokers_list.clone())
+                    .set("group.id", GROUP_ID)
+                    .set("enable.partition.eof", "false")
+                    .set("session.timeout.ms", "6000")
+                    .set("enable.auto.commit", "false")
+                    .set("message.timeout.ms", "5000")
+                    //.set("statistics.interval.ms", "30000")
+                    .set("auto.offset.reset", "earliest")
+                    .set("security.protocol", self.config.security_type.to_string())
+                    .set(
+                        "sasl.mechanisms",
+                        self.config.sasl_mechanism.clone().unwrap_or_default(),
+                    )
+                    .set(
+                        "sasl.username",
+                        self.config.sasl_username.clone().unwrap_or_default(),
+                    )
+                    .set(
+                        "sasl.password",
+                        self.config.sasl_password.clone().unwrap_or_default(),
+                    )
+                    //.set("sasl.jaas.config", self.config.jaas_config.clone().unwrap_or_default())
+                    .set_log_level(RDKafkaLogLevel::Debug)
+                    .create()
+            }
+            _ => {
+                ClientConfig::new()
+                    .set("bootstrap.servers", self.config.brokers_list.clone())
+                    .set("group.id", GROUP_ID)
+                    .set("enable.partition.eof", "false")
+                    .set("session.timeout.ms", "6000")
+                    .set("enable.auto.commit", "false")
+                    .set("message.timeout.ms", "5000")
+                    //.set("statistics.interval.ms", "30000")
+                    .set("auto.offset.reset", "earliest")
+                    .create()
+            }
+        };
+        producer
+    }
     fn consumer<C, T>(&self, context: C) -> KafkaResult<T>
     where
         C: ClientContext,
@@ -182,6 +229,42 @@ impl KafkaBackend {
         }
         partitions
     }
+    pub async fn send_messages(&self, topic: &String, messages: &Vec<KrustMessage>) {
+        info!("fetching partitions from topic {}", topic);
+        let producer: FutureProducer = self.producer().expect("Producer creation failed");
+        let producer = producer.borrow();
+
+        debug!("Producer created");
+        let messages_futures = messages
+            .iter()
+            .map(|message| async move {
+                // The send operation on the topic returns a future, which will be
+                // completed once the result or failure from Kafka is received.
+                let delivery_status = producer
+                    .send(
+                        FutureRecord::to(topic)
+                            .partition(message.partition)
+                            .payload(&message.value)
+                            .key(&message.key.clone().unwrap_or_default()),
+                        // .headers(OwnedHeaders::new().insert(Header {
+                        //     key: "header_key",
+                        //     value: Some("header_value"),
+                        // })),
+                        Duration::from_secs(0),
+                    )
+                    .await;
+
+                // This will be executed when the result is received.
+                info!("Delivery status for message {:?} received", message);
+                delivery_status
+            })
+            .collect::<Vec<_>>();
+        // This loop will wait until all delivery statuses have been received.
+        for future in messages_futures {
+            let result = future.await;
+            info!("Future completed. Result: {:?}", result);
+        }
+    }
 
     pub async fn topic_message_count(
         &self,
@@ -210,7 +293,15 @@ impl KafkaBackend {
         for p in partitions {
             if !cpartitions.is_empty() {
                 let low = match part_map.get(&p.id) {
-                    Some(part) => part.offset_high.unwrap_or(p.offset_low.unwrap()),
+                    Some(part) => {
+                        let o = part.offset_high.unwrap_or(p.offset_low.unwrap());
+                        let o = if o < p.offset_low.unwrap() {
+                            p.offset_low.unwrap()
+                        } else {
+                            o
+                        };
+                        o
+                    }
                     None => {
                         result.push(Partition {
                             id: p.id,
@@ -357,7 +448,7 @@ impl KafkaBackend {
                         }
                     };
                     trace!("key: '{:?}', payload: '{}', topic: {}, partition: {}, offset: {}, timestamp: {:?}",
-                    key, payload, m.topic(), m.partition(), m.offset(), m.timestamp());
+                        key, payload, m.topic(), m.partition(), m.offset(), m.timestamp());
                     let headers = if let Some(headers) = m.headers() {
                         let mut header_list: Vec<KrustHeader> = vec![];
                         for header in headers.iter() {
@@ -466,7 +557,7 @@ impl KafkaBackend {
                             }
                         };
                         trace!("key: '{:?}', payload: '{}', topic: {}, partition: {}, offset: {}, timestamp: {:?}",
-                        key, payload, m.topic(), m.partition(), m.offset(), m.timestamp());
+                            key, payload, m.topic(), m.partition(), m.offset(), m.timestamp());
                         let headers = if let Some(headers) = m.headers() {
                             let mut header_list: Vec<KrustHeader> = vec![];
                             for header in headers.iter() {

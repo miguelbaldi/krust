@@ -5,6 +5,7 @@ use std::borrow::Borrow;
 use chrono::{TimeZone, Utc};
 use chrono_tz::America;
 use csv::StringRecord;
+use gtk::prelude::*;
 use gtk::{
     gdk::{DisplayManager, Rectangle},
     ColumnViewSorter,
@@ -16,8 +17,6 @@ use relm4::{
     *,
 };
 use relm4_components::simple_combo_box::SimpleComboBox;
-use sourceview::prelude::*;
-use sourceview5 as sourceview;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace};
 
@@ -32,8 +31,7 @@ use crate::{
     },
     component::{
         messages::lists::{
-            HeaderListItem, HeaderNameColumn, HeaderValueColumn, MessageListItem,
-            MessageOfssetColumn, MessagePartitionColumn, MessageTimestampColumn,
+            MessageListItem, MessageOfssetColumn, MessagePartitionColumn, MessageTimestampColumn,
             MessageValueColumn,
         },
         status_bar::{StatusBarMsg, STATUS_BROKER},
@@ -41,7 +39,9 @@ use crate::{
     Repository, DATE_TIME_FORMAT,
 };
 
-use super::lists::MessageKeyColumn;
+use super::message_viewer::{MessageViewerModel, MessageViewerMsg};
+use super::messages_send_dialog::MessagesSendDialogMsg;
+use super::{lists::MessageKeyColumn, messages_send_dialog::MessagesSendDialogModel};
 
 // page actions
 relm4::new_action_group!(pub MessagesPageActionGroup, "messages_page");
@@ -49,6 +49,7 @@ relm4::new_stateless_action!(pub MessagesSearchAction, MessagesPageActionGroup, 
 
 relm4::new_action_group!(pub(super) MessagesListActionGroup, "messages-list");
 relm4::new_stateless_action!(pub(super) CopyMessagesAsCsv, MessagesListActionGroup, "copy-messages-as-csv");
+relm4::new_stateless_action!(pub(super) CopyMessagesKeyValue, MessagesListActionGroup, "copy-messages-key-value");
 relm4::new_stateless_action!(pub(super) CopyMessagesValue, MessagesListActionGroup, "copy-messages-value");
 relm4::new_stateless_action!(pub(super) CopyMessagesKey, MessagesListActionGroup, "copy-messages-key");
 
@@ -59,13 +60,14 @@ pub struct MessagesTabModel {
     mode: MessagesMode,
     pub connection: Option<KrustConnection>,
     messages_wrapper: TypedColumnView<MessageListItem, gtk::MultiSelection>,
-    headers_wrapper: TypedColumnView<HeaderListItem, gtk::NoSelection>,
+    message_viewer: Controller<MessageViewerModel>,
     page_size_combo: Controller<SimpleComboBox<u16>>,
     page_size: u16,
     fetch_type_combo: Controller<SimpleComboBox<KafkaFetch>>,
     fetch_type: KafkaFetch,
     max_messages: f64,
     messages_menu_popover: gtk::PopoverMenu,
+    add_messages: Controller<MessagesSendDialogModel>,
 }
 
 pub struct MessagesTabInit {
@@ -75,6 +77,7 @@ pub struct MessagesTabInit {
 #[derive(Debug)]
 pub enum Copy {
     AllAsCsv,
+    KeyValue,
     Value,
     Key,
 }
@@ -96,6 +99,7 @@ pub enum MessagesTabMsg {
     ToggleMode(bool),
     DigitsOnly(f64),
     CopyMessages(Copy),
+    AddMessages,
 }
 
 #[derive(Debug)]
@@ -118,6 +122,7 @@ impl FactoryComponent for MessagesTabModel {
         messages_menu: {
             section! {
                 "_Copy as CSV" => CopyMessagesAsCsv,
+                "_Copy key,value" => CopyMessagesKeyValue,
                 "_Copy value" => CopyMessagesValue,
                 "_Copy key" => CopyMessagesKey,
             }
@@ -126,6 +131,7 @@ impl FactoryComponent for MessagesTabModel {
 
     view! {
         #[root]
+        #[name(main_panel)]
         gtk::Paned {
             set_orientation: gtk::Orientation::Vertical,
             //set_resize_start_child: true,
@@ -170,6 +176,14 @@ impl FactoryComponent for MessagesTabModel {
                                 sender.input(MessagesTabMsg::RefreshMessages);
                             },
                         },
+                        #[name(btn_send_messages)]
+                        gtk::Button {
+                            set_icon_name: "list-add-symbolic",
+                            set_margin_start: 5,
+                            connect_clicked[sender] => move |_| {
+                                sender.input(MessagesTabMsg::AddMessages);
+                            },
+                        },
                         #[name(btn_cache_toggle)]
                         gtk::ToggleButton {
                             set_margin_start: 5,
@@ -195,6 +209,7 @@ impl FactoryComponent for MessagesTabModel {
                         gtk::SearchEntry {
                             set_hexpand: false,
                             set_halign: gtk::Align::Fill,
+                            set_width_chars: 50,
                             connect_search_changed[sender] => move |entry| {
                                 sender.clone().input(MessagesTabMsg::LiveSearchMessages(entry.text().to_string()));
                             },
@@ -226,51 +241,9 @@ impl FactoryComponent for MessagesTabModel {
                 set_orientation: gtk::Orientation::Vertical,
                 append = &gtk::StackSwitcher {
                     set_orientation: gtk::Orientation::Horizontal,
-                    set_stack: Some(&message_viewer),
+                    set_stack: Some(&message_viewer_stack),
                 },
-                append: message_viewer = &gtk::Stack {
-                    add_child = &gtk::Box {
-                        set_hexpand: true,
-                        set_vexpand: true,
-                        #[name = "value_container"]
-                        gtk::ScrolledWindow {
-                            add_css_class: "bordered",
-                            set_vexpand: true,
-                            set_hexpand: true,
-                            set_propagate_natural_height: true,
-                            set_overflow: gtk::Overflow::Hidden,
-                            set_valign: gtk::Align::Fill,
-                            #[name = "value_source_view"]
-                            sourceview::View {
-                                add_css_class: "file-preview-source",
-                                set_cursor_visible: true,
-                                set_editable: false,
-                                set_monospace: true,
-                                set_show_line_numbers: true,
-                                set_valign: gtk::Align::Fill,
-                            }
-                        },
-                    } -> {
-                        set_title: "Value",
-                        set_name: "Value",
-                    },
-                    add_child = &gtk::Box {
-                        gtk::ScrolledWindow {
-                            set_vexpand: true,
-                            set_hexpand: true,
-                            set_propagate_natural_width: true,
-                            self.headers_wrapper.view.clone() -> gtk::ColumnView {
-                                set_vexpand: true,
-                                set_hexpand: true,
-                                set_show_row_separators: true,
-                                set_show_column_separators: true,
-                            }
-                        },
-                    } -> {
-                        set_title: "Header",
-                        set_name: "Header",
-                    },
-                },
+                append: message_viewer_stack = &self.message_viewer.widget().clone() -> gtk::Stack {},
                 gtk::CenterBox {
                     set_orientation: gtk::Orientation::Horizontal,
                     set_halign: gtk::Align::Fill,
@@ -416,10 +389,8 @@ impl FactoryComponent for MessagesTabModel {
         messages_wrapper.append_column::<MessageValueColumn>();
         messages_wrapper.append_column::<MessageTimestampColumn>();
 
-        // Initialize the headers ListView wrapper
-        let mut headers_wrapper = TypedColumnView::<HeaderListItem, gtk::NoSelection>::new();
-        headers_wrapper.append_column::<HeaderNameColumn>();
-        headers_wrapper.append_column::<HeaderValueColumn>();
+        // Initialize message viewer
+        let message_viewer = MessageViewerModel::builder().launch(()).detach();
         let default_idx = 0;
         let page_size_combo = SimpleComboBox::builder()
             .launch(SimpleComboBox {
@@ -444,6 +415,12 @@ impl FactoryComponent for MessagesTabModel {
                 .unwrap();
         });
         let messages_menu_sender = sender.input_sender().clone();
+        let menu_copy_key_value_action = RelmAction::<CopyMessagesKeyValue>::new_stateless(move |_| {
+            messages_menu_sender
+                .send(MessagesTabMsg::CopyMessages(Copy::KeyValue))
+                .unwrap();
+        });
+        let messages_menu_sender = sender.input_sender().clone();
         let menu_copy_value_action = RelmAction::<CopyMessagesValue>::new_stateless(move |_| {
             messages_menu_sender
                 .send(MessagesTabMsg::CopyMessages(Copy::Value))
@@ -456,36 +433,50 @@ impl FactoryComponent for MessagesTabModel {
                 .unwrap();
         });
         messages_actions.add_action(menu_copy_all_csv_action);
+        messages_actions.add_action(menu_copy_key_value_action);
         messages_actions.add_action(menu_copy_value_action);
         messages_actions.add_action(menu_copy_key_action);
         messages_actions.register_for_widget(&messages_popover_menu);
+
+        let add_messages = MessagesSendDialogModel::builder()
+            //.transient_for(main_application())
+            .launch((Some(open.connection.clone()), Some(open.topic.clone())))
+            .detach();
+
         let model = MessagesTabModel {
             token: CancellationToken::new(),
             mode: MessagesMode::Live,
             topic: Some(open.topic),
             connection: Some(open.connection),
             messages_wrapper,
-            headers_wrapper,
+            message_viewer: message_viewer,
             page_size_combo,
             page_size: AVAILABLE_PAGE_SIZES[0],
             fetch_type_combo,
             fetch_type: KafkaFetch::default(),
             max_messages: 1000.0,
             messages_menu_popover: messages_popover_menu,
+            add_messages: add_messages,
         };
         let messages_view = &model.messages_wrapper.view;
-        let _headers_view = &model.headers_wrapper.view;
-        let _sender_for_selection = sender.clone();
+        let sender_for_selection = sender.clone();
         messages_view
             .model()
             .unwrap()
-            .connect_selection_changed(move |_selection_model, _, _| {
-                //sender_for_selection.input(MessagesTabMsg::Selection(selection_model.n_items()));
+            .connect_selection_changed(move |selection_model, i, j| {
+                let size = selection_model.selection().size();
+                if size == 1 {
+                    let selected = selection_model.selection().minimum();
+                    trace!(
+                        "messages_view::selection_changed[{}][{}][{}][{}]",
+                        i,
+                        j,
+                        size,
+                        selected
+                    );
+                    sender_for_selection.input(MessagesTabMsg::OpenMessage(selected));
+                }
             });
-        let sender_for_activate = sender.clone();
-        messages_view.connect_activate(move |_view, idx| {
-            sender_for_activate.input(MessagesTabMsg::OpenMessage(idx));
-        });
 
         messages_view
             .sorter()
@@ -511,18 +502,11 @@ impl FactoryComponent for MessagesTabModel {
         model
     }
 
-    fn post_view(&self, widgets: &mut Self::Widgets) {
-        let buffer = widgets
-            .value_source_view
-            .buffer()
-            .downcast::<sourceview::Buffer>()
-            .expect("sourceview was not backed by sourceview buffer");
+    fn pre_view(&self, _widgets: &mut Self::Widgets) {
+        trace!("messages_tab::pre_view");
+    }
 
-        if let Some(scheme) = &sourceview::StyleSchemeManager::new().scheme("oblivion") {
-            buffer.set_style_scheme(Some(scheme));
-        }
-        let language = sourceview::LanguageManager::default().language("json");
-        buffer.set_language(language.as_ref());
+    fn post_view(&self, widgets: &mut Self::Widgets) {
         widgets.max_messages.set_increments(1000.0, 10000.0);
         // Shortcuts
         // let mut actions = RelmActionGroup::<MessagesPageActionGroup>::new();
@@ -564,6 +548,9 @@ impl FactoryComponent for MessagesTabModel {
         sender: FactorySender<Self>,
     ) {
         match msg {
+            MessagesTabMsg::AddMessages => {
+                self.add_messages.emit(MessagesSendDialogMsg::Show);
+            }
             MessagesTabMsg::DigitsOnly(value) => {
                 self.max_messages = value;
                 info!("Max messages:{}", self.max_messages);
@@ -605,6 +592,7 @@ impl FactoryComponent for MessagesTabModel {
                 };
                 self.page_size = page_size;
                 self.page_size_combo.widget().queue_allocate();
+                sender.input(MessagesTabMsg::SearchMessages);
             }
             MessagesTabMsg::FetchTypeChanged(_idx) => {
                 let fetch_type = match self.fetch_type_combo.model().get_active_elem() {
@@ -635,6 +623,7 @@ impl FactoryComponent for MessagesTabModel {
                 sender.spawn_oneshot_command(move || {
                     let data = match copy {
                         Copy::AllAsCsv => copy_all_as_csv(&selected_items),
+                        Copy::KeyValue => copy_key_value(&selected_items),
                         Copy::Value => copy_value(&selected_items),
                         Copy::Key => copy_key(&selected_items),
                     };
@@ -644,13 +633,6 @@ impl FactoryComponent for MessagesTabModel {
                         CommandMsg::CopyToClipboard(String::default())
                     }
                 });
-                // if let Ok(data) = data {
-                //     DisplayManager::get()
-                //         .default_display()
-                //         .unwrap()
-                //         .clipboard()
-                //         .set_text(data.as_str());
-                // }
             }
             MessagesTabMsg::Open(connection, topic) => {
                 let conn_id = &connection.id.unwrap();
@@ -875,8 +857,6 @@ impl FactoryComponent for MessagesTabModel {
                     MessagesMode::Live => info!("no need to cleanup list on live mode"),
                     MessagesMode::Cached { refresh: _ } => self.messages_wrapper.clear(),
                 }
-                self.headers_wrapper.clear();
-                widgets.value_source_view.buffer().set_text("");
                 on_loading(widgets, true);
                 fill_pagination(
                     response.page_operation,
@@ -892,7 +872,7 @@ impl FactoryComponent for MessagesTabModel {
                         .iter()
                         .map(|m| MessageListItem::new(m.clone())),
                 );
-                widgets.value_source_view.buffer().set_text("");
+                self.message_viewer.emit(MessageViewerMsg::Clear);
                 let cache_ts = response
                     .topic
                     .and_then(|t| {
@@ -914,40 +894,21 @@ impl FactoryComponent for MessagesTabModel {
             MessagesTabMsg::OpenMessage(message_idx) => {
                 let item = self.messages_wrapper.get_visible(message_idx).unwrap();
                 let message_text = item.borrow().value.clone();
-
-                let buffer = widgets
-                    .value_source_view
-                    .buffer()
-                    .downcast::<sourceview::Buffer>()
-                    .expect("sourceview was not backed by sourceview buffer");
-
-                let valid_json: Result<serde_json::Value, _> =
-                    serde_json::from_str(message_text.as_str());
-                let (language, formatted_text) = match valid_json {
-                    Ok(jt) => (
-                        sourceview::LanguageManager::default().language("json"),
-                        serde_json::to_string_pretty(&jt).unwrap(),
-                    ),
-                    Err(_) => (
-                        sourceview::LanguageManager::default().language("text"),
-                        message_text,
-                    ),
-                };
-                buffer.set_language(language.as_ref());
-                buffer.set_text(formatted_text.as_str());
-
-                self.headers_wrapper.clear();
-                for header in item.borrow().headers.iter() {
-                    self.headers_wrapper
-                        .append(HeaderListItem::new(header.clone()));
-                }
+                let headers = item.borrow().headers.clone();
+                self.message_viewer
+                    .emit(MessageViewerMsg::Open(message_text, headers));
             }
         };
 
         self.update_view(widgets, sender);
     }
 
-    fn update_cmd(&mut self, message: Self::CommandOutput, sender: FactorySender<Self>) {
+    fn update_cmd_with_view(
+        &mut self,
+        _widgets: &mut Self::Widgets,
+        message: Self::CommandOutput,
+        sender: FactorySender<Self>,
+    ) {
         match message {
             CommandMsg::Data(messages) => sender.input(MessagesTabMsg::UpdateMessages(messages)),
             CommandMsg::CopyToClipboard(data) => {
@@ -1025,11 +986,15 @@ fn fill_pagination(
         }
         (_, _) => (),
     }
-    debug!("fill pagination of current page {}", current_page);
+    debug!("fill pagination of current page {} of {}", current_page, pages);
     match current_page {
-        1 => {
+        1 if pages == 1 => {
+            widgets.btn_next_page.set_sensitive(false);
             widgets.btn_previous_page.set_sensitive(false);
+        }
+        1 => {
             widgets.btn_next_page.set_sensitive(true);
+            widgets.btn_previous_page.set_sensitive(false);
         }
         n if n >= pages => {
             widgets.btn_next_page.set_sensitive(false);
@@ -1071,6 +1036,20 @@ fn copy_all_as_csv(
     }
     let data = String::from_utf8(wtr.into_inner().unwrap_or_default());
     data
+}
+fn copy_key_value(selected_items: &Vec<KrustMessage>) -> Result<String, std::string::FromUtf8Error> {
+    let mut copy_content = String::default();
+    for item in selected_items {
+        let key = item.key.clone();
+        let value = item.value.clone();
+        let clean_value = match serde_json::from_str::<serde_json::Value>(value.as_str()) {
+            Ok(json) => json.to_string(),
+            Err(_) => value.replace('\n', ""),
+        };
+        let copy_text = format!("{},{}\n", key.unwrap_or_default(), clean_value);
+        copy_content.push_str(&copy_text.as_str());
+    }
+    Ok(copy_content)
 }
 fn copy_value(selected_items: &Vec<KrustMessage>) -> Result<String, std::string::FromUtf8Error> {
     let mut copy_content = String::default();
