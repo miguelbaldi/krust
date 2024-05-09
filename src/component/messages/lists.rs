@@ -1,7 +1,4 @@
-use crate::{
-    backend::repository::{KrustHeader, KrustMessage},
-    DATE_TIME_FORMAT,
-};
+use crate::backend::repository::{KrustHeader, KrustMessage};
 use chrono::prelude::*;
 use chrono_tz::America;
 use gtk::prelude::*;
@@ -96,6 +93,7 @@ pub struct MessageListItem {
     pub value: String,
     pub timestamp: Option<i64>,
     pub headers: Vec<KrustHeader>,
+    pub timestamp_formatter: String,
 }
 
 impl PartialEq for MessageListItem {
@@ -109,7 +107,7 @@ impl PartialEq for MessageListItem {
 impl Eq for MessageListItem {}
 
 impl MessageListItem {
-    pub fn new(value: KrustMessage) -> Self {
+    pub fn new(value: KrustMessage, timestamp_formatter: String) -> Self {
         Self {
             offset: value.offset,
             partition: value.partition,
@@ -117,13 +115,14 @@ impl MessageListItem {
             value: value.value,
             timestamp: value.timestamp,
             headers: value.headers,
+            timestamp_formatter: timestamp_formatter,
         }
     }
 }
 
-pub struct MessageOfssetColumn;
+pub struct MessageOffsetColumn;
 
-impl LabelColumn for MessageOfssetColumn {
+impl LabelColumn for MessageOffsetColumn {
     type Item = MessageListItem;
     type Value = i64;
 
@@ -163,57 +162,62 @@ impl LabelColumn for MessagePartitionColumn {
 
 pub struct MessageTimestampColumn;
 
-impl LabelColumn for MessageTimestampColumn {
+impl RelmColumn for MessageTimestampColumn {
+
+    type Root = gtk::Label;
+    type Widgets = ();
     type Item = MessageListItem;
-    type Value = i64;
 
     const COLUMN_NAME: &'static str = "Date/time (Timestamp)";
-
-    const ENABLE_SORT: bool = true;
     const ENABLE_RESIZE: bool = true;
+    const ENABLE_EXPAND: bool = false;
 
-    fn get_cell_value(item: &Self::Item) -> Self::Value {
-        item.timestamp.unwrap_or(Utc::now().timestamp())
+    fn setup(_item: &gtk::ListItem) -> (Self::Root, Self::Widgets) {
+        let label = gtk::Label::new(None);
+        label.set_halign(gtk::Align::Center);
+        (label, ())
     }
 
-    fn format_cell_value(value: &Self::Value) -> String {
-        format!(
+    fn bind(item: &mut Self::Item, _: &mut Self::Widgets, label: &mut Self::Root) {
+        let formatted = format!(
             "{}",
-            Utc.timestamp_millis_opt(*value)
-                .unwrap()
-                .with_timezone(&America::Sao_Paulo)
-                .format(DATE_TIME_FORMAT)
-        )
+            Utc.timestamp_millis_opt(item.timestamp.unwrap_or_default())
+            .unwrap()
+            .with_timezone(&America::Sao_Paulo)
+            .format(&item.timestamp_formatter)
+        );
+        label.set_label(&formatted);
+    }
+
+    fn sort_fn() -> OrdFn<Self::Item> {
+        Some(Box::new(|a: &MessageListItem, b: &MessageListItem| {
+            a.timestamp.unwrap_or_default().cmp(&b.timestamp.unwrap_or_default())
+        }))
     }
 }
 
 pub struct MessageValueColumn;
 
-impl LabelColumn for MessageValueColumn {
+impl RelmColumn for MessageValueColumn {
+    type Root = gtk::Label;
+    type Widgets = ();
     type Item = MessageListItem;
-    type Value = String;
 
     const COLUMN_NAME: &'static str = "Value";
     const ENABLE_RESIZE: bool = true;
     const ENABLE_EXPAND: bool = true;
-    const ENABLE_SORT: bool = false;
 
-    fn get_cell_value(item: &Self::Item) -> Self::Value {
-        item.value.clone()
+    fn setup(_item: &gtk::ListItem) -> (Self::Root, Self::Widgets) {
+        let label = gtk::Label::new(None);
+        label.set_halign(gtk::Align::Center);
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        (label, ())
     }
 
-    fn format_cell_value(value: &Self::Value) -> String {
-        if value.len() >= 100 {
-            format!(
-                "{}...",
-                value
-                    .replace('\n', " ")
-                    .get(0..100)
-                    .unwrap_or("")
-            )
-        } else {
-            format!("{}...", value)
-        }
+    fn bind(item: &mut Self::Item, _widgets: &mut Self::Widgets, label: &mut Self::Root) {
+        let formatted = item.value
+                    .replace('\n', " ").clone();
+        label.set_label(&formatted);
     }
 }
 pub struct MessageKeyColumn;

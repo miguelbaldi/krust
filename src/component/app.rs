@@ -2,7 +2,10 @@
 
 use gtk::{glib, prelude::*};
 use relm4::{
-    actions::{RelmAction, RelmActionGroup}, factory::FactoryVecDeque, main_adw_application, prelude::*
+    actions::{RelmAction, RelmActionGroup},
+    factory::FactoryVecDeque,
+    main_adw_application,
+    prelude::*,
 };
 use relm4_components::alert::{Alert, AlertMsg, AlertResponse, AlertSettings};
 use tracing::{error, info, warn};
@@ -10,18 +13,15 @@ use tracing::{error, info, warn};
 use crate::{
     backend::repository::{KrustConnection, KrustTopic, Repository},
     component::{
-        connection_list::KrustConnectionOutput,
-        connection_page::{ConnectionPageModel, ConnectionPageMsg, ConnectionPageOutput},
-        settings_page::{SettingsPageModel, SettingsPageMsg, SettingsPageOutput},
-        status_bar::{StatusBarModel, STATUS_BROKER}, topics::topics_page::{TopicsPageMsg, TopicsPageOutput},
+        banner::BANNER_BROKER, connection_list::KrustConnectionOutput, connection_page::{ConnectionPageModel, ConnectionPageMsg, ConnectionPageOutput}, settings_dialog::{SettingsDialogInit, SettingsDialogMsg}, status_bar::{StatusBarModel, STATUS_BROKER}, task_manager::{TaskManagerModel, TASK_MANAGER_BROKER}, topics::topics_page::{TopicsPageMsg, TopicsPageOutput}
     },
     config::State,
-    modals::about::AboutDialog, APP_ID, APP_NAME, APP_RESOURCE_PATH,
+    modals::about::AboutDialog,
+    APP_ID, APP_NAME, APP_RESOURCE_PATH,
 };
 
 use super::{
-    connection_list::ConnectionListModel,
-    messages::messages_page::{MessagesPageModel, MessagesPageMsg}, topics::topics_page::TopicsPageModel,
+    banner::AppBannerModel, connection_list::ConnectionListModel, messages::messages_page::{MessagesPageModel, MessagesPageMsg}, settings_dialog::SettingsDialogModel, topics::topics_page::TopicsPageModel
 };
 
 #[derive(Debug)]
@@ -42,16 +42,16 @@ pub enum AppMsg {
 }
 
 pub struct AppModel {
-    //state: State,
+    _app_banner: Controller<AppBannerModel>,
     _status_bar: Controller<StatusBarModel>,
+    _task_manager: Controller<TaskManagerModel>,
     close_dialog: Controller<Alert>,
     _about_dialog: Controller<AboutDialog>,
     connections: FactoryVecDeque<ConnectionListModel>,
-    //main_stack: gtk::Stack,
     connection_page: Controller<ConnectionPageModel>,
     topics_page: Controller<TopicsPageModel>,
     messages_page: Controller<MessagesPageModel>,
-    settings_page: Controller<SettingsPageModel>,
+    settings_dialog: Controller<SettingsDialogModel>,
 }
 
 relm4::new_action_group!(pub(super) WindowActionGroup, "win");
@@ -128,6 +128,7 @@ impl Component for AppModel {
                                     },
                                 },
                             },
+                            task_manager.widget() -> &adw::Bin {},
                         },
                     },
                     #[wrap(Some)]
@@ -137,6 +138,7 @@ impl Component for AppModel {
                         #[wrap(Some)]
                         set_child = &gtk::Box {
                             set_orientation: gtk::Orientation::Vertical,
+                            app_banner.widget() -> &adw::Banner {},
                             #[name(main_stack)]
                             gtk::Stack {
                                 add_child = &gtk::Box {
@@ -164,21 +166,19 @@ impl Component for AppModel {
                                     set_name: "Messages",
                                     set_title: "Messages",
                                 },
-                                add_child = settings_page.widget() -> &gtk::Grid {} -> {
-                                    set_name: "Settings",
-                                },
                             },
                         },
                     },
                 },
                 gtk::Box {
+                    set_visible: false,
                     add_css_class: "status-bar",
                     status_bar.widget() -> &gtk::CenterBox {}
-                }
+                },
             },
 
             connect_close_request[sender] => move |_this| {
-                sender.input(AppMsg::CloseRequest);
+                sender.input(AppMsg::Close);
                 gtk::glib::Propagation::Stop
             },
 
@@ -193,6 +193,13 @@ impl Component for AppModel {
 
         let status_bar: Controller<StatusBarModel> = StatusBarModel::builder()
             .launch_with_broker((), &STATUS_BROKER)
+            .detach();
+
+        let app_banner: Controller<AppBannerModel> = AppBannerModel::builder()
+            .launch_with_broker((), &BANNER_BROKER)
+            .detach();
+        let task_manager: Controller<TaskManagerModel> = TaskManagerModel::builder()
+            .launch_with_broker((), &TASK_MANAGER_BROKER)
             .detach();
 
         let connections = FactoryVecDeque::builder()
@@ -220,14 +227,14 @@ impl Component for AppModel {
                 }
             });
 
-        let messages_page: Controller<MessagesPageModel> =
-            MessagesPageModel::builder().priority(glib::Priority::HIGH_IDLE).launch(()).detach();
-
-        let settings_page: Controller<SettingsPageModel> = SettingsPageModel::builder()
+        let messages_page: Controller<MessagesPageModel> = MessagesPageModel::builder()
+            .priority(glib::Priority::HIGH_IDLE)
             .launch(())
-            .forward(sender.input_sender(), |msg| match msg {
-                SettingsPageOutput::Saved => AppMsg::SavedSettings,
-            });
+            .detach();
+
+        let settings_dialog: Controller<SettingsDialogModel> = SettingsDialogModel::builder()
+            .launch(SettingsDialogInit{})
+            .detach();
 
         let state = State::read().unwrap_or_default();
         info!("starting with application state: {:?}", &state);
@@ -271,8 +278,9 @@ impl Component for AppModel {
             Err(e) => error!("error loading connections: {:?}", e),
         }
         let model = AppModel {
-            //state,
+            _app_banner: app_banner,
             _status_bar: status_bar,
+            _task_manager: task_manager,
             close_dialog: Alert::builder()
                 .transient_for(&root)
                 .launch(AlertSettings {
@@ -291,7 +299,7 @@ impl Component for AppModel {
             connection_page,
             topics_page,
             messages_page,
-            settings_page,
+            settings_dialog,
         };
         widgets.load_window_size();
         ComponentParts { model, widgets }
@@ -400,15 +408,14 @@ impl Component for AppModel {
                 widgets.main_stack.set_visible_child_name("Home");
             }
             AppMsg::ShowSettings => {
-                info!("|-->Showing settings page");
-                self.settings_page.emit(SettingsPageMsg::Edit);
-                self.settings_page.widget().set_visible(true);
-                widgets.main_stack.set_visible_child_name("Settings");
+                info!("|-->Showing settings dialog");
+                self.settings_dialog.emit(SettingsDialogMsg::Show);
             }
         }
         self.update_view(widgets, sender);
     }
     fn shutdown(&mut self, widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        info!("app::saving window state");
         widgets
             .save_window_size()
             .expect("window state should be saved");

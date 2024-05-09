@@ -20,6 +20,9 @@ use relm4_components::simple_combo_box::SimpleComboBox;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace};
 
+use crate::backend::settings::Settings;
+use crate::component::banner::{AppBannerMsg, BANNER_BROKER};
+use crate::component::task_manager::{Task, TaskManagerMsg, TaskVariant, TASK_MANAGER_BROKER};
 use crate::{
     backend::{
         kafka::KafkaFetch,
@@ -31,12 +34,12 @@ use crate::{
     },
     component::{
         messages::lists::{
-            MessageListItem, MessageOfssetColumn, MessagePartitionColumn, MessageTimestampColumn,
+            MessageListItem, MessageOffsetColumn, MessagePartitionColumn, MessageTimestampColumn,
             MessageValueColumn,
         },
         status_bar::{StatusBarMsg, STATUS_BROKER},
     },
-    Repository, DATE_TIME_FORMAT,
+    Repository,
 };
 
 use super::message_viewer::{MessageViewerModel, MessageViewerMsg};
@@ -384,7 +387,7 @@ impl FactoryComponent for MessagesTabModel {
         // Initialize the messages ListView wrapper
         let mut messages_wrapper = TypedColumnView::<MessageListItem, gtk::MultiSelection>::new();
         messages_wrapper.append_column::<MessagePartitionColumn>();
-        messages_wrapper.append_column::<MessageOfssetColumn>();
+        messages_wrapper.append_column::<MessageOffsetColumn>();
         messages_wrapper.append_column::<MessageKeyColumn>();
         messages_wrapper.append_column::<MessageValueColumn>();
         messages_wrapper.append_column::<MessageTimestampColumn>();
@@ -415,11 +418,12 @@ impl FactoryComponent for MessagesTabModel {
                 .unwrap();
         });
         let messages_menu_sender = sender.input_sender().clone();
-        let menu_copy_key_value_action = RelmAction::<CopyMessagesKeyValue>::new_stateless(move |_| {
-            messages_menu_sender
-                .send(MessagesTabMsg::CopyMessages(Copy::KeyValue))
-                .unwrap();
-        });
+        let menu_copy_key_value_action =
+            RelmAction::<CopyMessagesKeyValue>::new_stateless(move |_| {
+                messages_menu_sender
+                    .send(MessagesTabMsg::CopyMessages(Copy::KeyValue))
+                    .unwrap();
+            });
         let messages_menu_sender = sender.input_sender().clone();
         let menu_copy_value_action = RelmAction::<CopyMessagesValue>::new_stateless(move |_| {
             messages_menu_sender
@@ -635,6 +639,7 @@ impl FactoryComponent for MessagesTabModel {
                 });
             }
             MessagesTabMsg::Open(connection, topic) => {
+                let timestamp_format = Settings::read().unwrap_or_default().timestamp_formatter();
                 let conn_id = &connection.id.unwrap();
                 let topic_name = &topic.name.clone();
                 self.connection = Some(connection);
@@ -651,7 +656,7 @@ impl FactoryComponent for MessagesTabModel {
                             Utc.timestamp_millis_opt(ts)
                                 .unwrap()
                                 .with_timezone(&America::Sao_Paulo)
-                                .format(DATE_TIME_FORMAT)
+                                .format(&timestamp_format)
                                 .to_string()
                         })
                     })
@@ -681,6 +686,8 @@ impl FactoryComponent for MessagesTabModel {
                 sender.input(MessagesTabMsg::GetMessages);
             }
             MessagesTabMsg::GetMessages => {
+                //sender.output(MessagesTabOutput::ShowBanner("Working...".to_string())).unwrap();
+                BANNER_BROKER.send(AppBannerMsg::Show("Working...".to_string()));
                 STATUS_BROKER.send(StatusBarMsg::Start);
                 on_loading(widgets, false);
                 let mode = self.mode;
@@ -697,19 +704,25 @@ impl FactoryComponent for MessagesTabModel {
                     self.token = CancellationToken::new();
                 }
                 let page_size = self.page_size;
-                let token = self.token.clone();
                 let search = get_search_term(widgets);
                 let fetch = self.fetch_type.clone();
                 let max_messages: i64 = self.max_messages as i64;
                 widgets.pag_current_entry.set_text("0");
+                let task_name = format!("Working on {}", &topic.name.clone());
+                let task = Task::new(
+                    TaskVariant::FetchMessages,
+                    Some(task_name),
+                    Some(self.token.clone()),
+                );
+                TASK_MANAGER_BROKER.send(TaskManagerMsg::AddTask(task.clone()));
                 sender.oneshot_command(async move {
                     // Run async background task
                     let messages_worker = MessagesWorker::new();
                     let result = &messages_worker
                         .get_messages(
-                            token,
                             &MessagesRequest {
-                                mode,
+                                task: Some(task),
+                                mode: mode,
                                 connection: conn,
                                 topic: topic.clone(),
                                 page_operation: PageOp::Next,
@@ -729,6 +742,7 @@ impl FactoryComponent for MessagesTabModel {
             }
             MessagesTabMsg::GetNextMessages => {
                 STATUS_BROKER.send(StatusBarMsg::Start);
+                BANNER_BROKER.send(AppBannerMsg::Show("Working...".to_string()));
                 on_loading(widgets, false);
                 let mode = self.mode;
                 let topic = self.topic.clone().unwrap();
@@ -752,21 +766,27 @@ impl FactoryComponent for MessagesTabModel {
                         .unwrap(),
                 );
                 let search = get_search_term(widgets);
-                let token = self.token.clone();
                 let fetch = self.fetch_type.clone();
                 let max_messages: i64 = self.max_messages as i64;
                 info!(
                     "getting next messages [page_size={}, last_offset={}, last_partition={}]",
                     page_size, offset, partition
                 );
+                let task_name = format!("Working on {}", &topic.name.clone());
+                let task = Task::new(
+                    TaskVariant::FetchMessages,
+                    Some(task_name),
+                    Some(self.token.clone()),
+                );
+                TASK_MANAGER_BROKER.send(TaskManagerMsg::AddTask(task.clone()));
                 sender.oneshot_command(async move {
                     // Run async background task
                     let messages_worker = MessagesWorker::new();
                     let result = &messages_worker
                         .get_messages(
-                            token,
                             &MessagesRequest {
-                                mode,
+                                task: Some(task.clone()),
+                                mode: mode,
                                 connection: conn,
                                 topic: topic.clone(),
                                 page_operation: PageOp::Next,
@@ -786,6 +806,7 @@ impl FactoryComponent for MessagesTabModel {
             }
             MessagesTabMsg::GetPreviousMessages => {
                 STATUS_BROKER.send(StatusBarMsg::Start);
+                BANNER_BROKER.send(AppBannerMsg::Show("Working...".to_string()));
                 on_loading(widgets, false);
                 let mode = self.mode;
                 let topic = self.topic.clone().unwrap();
@@ -808,18 +829,24 @@ impl FactoryComponent for MessagesTabModel {
                         .parse::<usize>()
                         .unwrap(),
                 );
-                let token = self.token.clone();
                 let search = get_search_term(widgets);
                 let fetch = self.fetch_type.clone();
                 let max_messages: i64 = self.max_messages as i64;
+                let task_name = format!("Working on {}", &topic.name.clone());
+                let task = Task::new(
+                    TaskVariant::FetchMessages,
+                    Some(task_name),
+                    Some(self.token.clone()),
+                );
+                TASK_MANAGER_BROKER.send(TaskManagerMsg::AddTask(task.clone()));
                 sender.oneshot_command(async move {
                     // Run async background task
                     let messages_worker = MessagesWorker::new();
                     let result = &messages_worker
                         .get_messages(
-                            token,
                             &MessagesRequest {
-                                mode,
+                                task: Some(task.clone()),
+                                mode:mode,
                                 connection: conn,
                                 topic: topic.clone(),
                                 page_operation: PageOp::Prev,
@@ -851,6 +878,7 @@ impl FactoryComponent for MessagesTabModel {
                 });
             }
             MessagesTabMsg::UpdateMessages(response) => {
+                let timestamp_formatter = Settings::read().unwrap_or_default().timestamp_formatter();
                 let total = response.total;
                 self.topic = response.topic.clone();
                 match self.mode {
@@ -870,7 +898,7 @@ impl FactoryComponent for MessagesTabModel {
                     response
                         .messages
                         .iter()
-                        .map(|m| MessageListItem::new(m.clone())),
+                        .map(|m| MessageListItem::new(m.clone(), timestamp_formatter.clone())),
                 );
                 self.message_viewer.emit(MessageViewerMsg::Clear);
                 let cache_ts = response
@@ -880,16 +908,20 @@ impl FactoryComponent for MessagesTabModel {
                             Utc.timestamp_millis_opt(ts)
                                 .unwrap()
                                 .with_timezone(&America::Sao_Paulo)
-                                .format(DATE_TIME_FORMAT)
+                                .format(&timestamp_formatter)
                                 .to_string()
                         })
                     })
                     .unwrap_or(String::default());
                 widgets.cache_timestamp.set_label(&cache_ts);
                 widgets.cache_timestamp.set_visible(true);
+                BANNER_BROKER.send(AppBannerMsg::Hide);
                 STATUS_BROKER.send(StatusBarMsg::StopWithInfo {
                     text: Some(format!("{} messages loaded!", self.messages_wrapper.len())),
                 });
+                if let Some(task) = response.task.clone() {
+                    TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task, 0.2));
+                }
             }
             MessagesTabMsg::OpenMessage(message_idx) => {
                 let item = self.messages_wrapper.get_visible(message_idx).unwrap();
@@ -986,7 +1018,10 @@ fn fill_pagination(
         }
         (_, _) => (),
     }
-    debug!("fill pagination of current page {} of {}", current_page, pages);
+    debug!(
+        "fill pagination of current page {} of {}",
+        current_page, pages
+    );
     match current_page {
         1 if pages == 1 => {
             widgets.btn_next_page.set_sensitive(false);
@@ -1010,6 +1045,7 @@ fn fill_pagination(
 fn copy_all_as_csv(
     selected_items: &Vec<KrustMessage>,
 ) -> Result<String, std::string::FromUtf8Error> {
+    let timestamp_format = Settings::read().unwrap_or_default().timestamp_formatter();
     let mut wtr = csv::WriterBuilder::new()
         .delimiter(b';')
         .quote_style(csv::QuoteStyle::NonNumeric)
@@ -1025,19 +1061,26 @@ fn copy_all_as_csv(
             Err(_) => value.replace('\n', ""),
         };
         let timestamp = item.borrow().timestamp;
+        let timestamp = Utc.timestamp_millis_opt(timestamp.unwrap_or_default())
+                .unwrap()
+                .with_timezone(&America::Sao_Paulo)
+                .format(&timestamp_format)
+                .to_string();
         let record = StringRecord::from(vec![
             partition.to_string(),
             offset.to_string(),
             key.unwrap_or_default(),
             clean_value,
-            timestamp.unwrap_or_default().to_string(),
+            timestamp,
         ]);
         let _ = wtr.write_record(&record);
     }
     let data = String::from_utf8(wtr.into_inner().unwrap_or_default());
     data
 }
-fn copy_key_value(selected_items: &Vec<KrustMessage>) -> Result<String, std::string::FromUtf8Error> {
+fn copy_key_value(
+    selected_items: &Vec<KrustMessage>,
+) -> Result<String, std::string::FromUtf8Error> {
     let mut copy_content = String::default();
     for item in selected_items {
         let key = item.key.clone();

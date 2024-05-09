@@ -1,9 +1,12 @@
 use chrono::Utc;
 use tokio::select;
-use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::{config::ExternalError, Repository};
+use crate::{
+    component::task_manager::{Task, TaskManagerMsg, TASK_MANAGER_BROKER},
+    config::ExternalError,
+    Repository,
+};
 
 use super::{
     kafka::{KafkaBackend, KafkaFetch},
@@ -27,6 +30,7 @@ pub enum PageOp {
 
 #[derive(Debug, Clone)]
 pub struct MessagesRequest {
+    pub task: Option<Task>,
     pub mode: MessagesMode,
     pub connection: KrustConnection,
     pub topic: KrustTopic,
@@ -40,6 +44,7 @@ pub struct MessagesRequest {
 
 #[derive(Debug, Clone)]
 pub struct MessagesResponse {
+    pub task: Option<Task>,
     pub page_operation: PageOp,
     pub page_size: u16,
     pub total: usize,
@@ -86,17 +91,19 @@ impl MessagesWorker {
     }
     pub async fn get_messages(
         self,
-        token: CancellationToken,
         request: &MessagesRequest,
     ) -> Result<MessagesResponse, ExternalError> {
+        let task = request.task.clone();
+        let token =  request.task.clone().unwrap().token.unwrap();
         let req = request.clone();
         let join_handle = tokio::spawn(async move {
             // Wait for either cancellation or a very long time
             select! {
                 _ = token.cancelled() => {
-                    info!("request {:?} cancelled", &req);
+                    info!("request with task {:?} cancelled", &req.task);
+                    TASK_MANAGER_BROKER.send(TaskManagerMsg::RemoveTask(task.unwrap()));
                     // The token was cancelled
-                    Ok(MessagesResponse { total: 0, messages: Vec::new(), topic: Some(req.topic), page_operation: req.page_operation, page_size: req.page_size, search: req.search})
+                    Ok(MessagesResponse { task: req.task, total: 0, messages: Vec::new(), topic: Some(req.topic), page_operation: req.page_operation, page_size: req.page_size, search: req.search})
                 }
                 messages = self.get_messages_by_mode(&req) => {
                     messages
@@ -110,6 +117,8 @@ impl MessagesWorker {
         self,
         request: &MessagesRequest,
     ) -> Result<MessagesResponse, ExternalError> {
+        let task = request.task.clone().unwrap();
+        TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task, 0.1,));
         match request.mode {
             MessagesMode::Live => self.get_messages_live(request).await,
             MessagesMode::Cached { refresh: _ } => self.get_messages_cached(request).await,
@@ -120,6 +129,7 @@ impl MessagesWorker {
         self,
         request: &MessagesRequest,
     ) -> Result<MessagesResponse, ExternalError> {
+        let task = request.task.clone().unwrap();
         let refresh = match request.mode {
             MessagesMode::Live => false,
             MessagesMode::Cached { refresh } => refresh,
@@ -144,6 +154,7 @@ impl MessagesWorker {
             topic.connection_id.expect("should have connection id"),
             &topic,
         )?;
+        TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), 0.1,));
         // Run async background task
         let mut mrepo = MessagesRepository::new(topic.connection_id.unwrap(), &topic.name);
         let total = match request.topic.cached {
@@ -151,70 +162,73 @@ impl MessagesWorker {
                 if refresh {
                     let partitions = mrepo.find_offsets().ok();
                     let topic = kafka
-                    .topic_message_count(&topic.name, None, None, partitions.clone())
-                    .await;
+                        .topic_message_count(&topic.name, None, None, partitions.clone())
+                        .await;
                     let partitions = topic.partitions.clone();
                     let total = topic.total.unwrap_or_default();
                     kafka
+                        .cache_messages_for_topic(
+                            topic_name,
+                            total,
+                            &mut mrepo,
+                            Some(partitions),
+                            Some(KafkaFetch::Newest),
+                        )
+                        .await
+                        .unwrap();
+                }
+                mrepo
+                    .count_messages(request.search.clone())
+                    .unwrap_or_default()
+            }
+            None => {
+                let total = kafka
+                    .topic_message_count(&topic.name, None, None, None)
+                    .await
+                    .total
+                    .unwrap_or_default();
+                mrepo.init().unwrap();
+                kafka
                     .cache_messages_for_topic(
                         topic_name,
                         total,
                         &mut mrepo,
-                        Some(partitions),
-                        Some(KafkaFetch::Newest),
+                        None,
+                        Some(KafkaFetch::Oldest),
                     )
                     .await
                     .unwrap();
-                }
-                mrepo
-                .count_messages(request.search.clone())
-                .unwrap_or_default()
-            }
-            None => {
-                let total = kafka
-                .topic_message_count(&topic.name, None, None, None)
-                .await
-                .total
-                .unwrap_or_default();
-                mrepo.init().unwrap();
-                kafka
-                .cache_messages_for_topic(
-                    topic_name,
-                    total,
-                    &mut mrepo,
-                    None,
-                    Some(KafkaFetch::Oldest),
-                )
-                .await
-                .unwrap();
                 let total = if request.search.clone().is_some() {
                     mrepo
-                    .count_messages(request.search.clone())
-                    .unwrap_or_default()
+                        .count_messages(request.search.clone())
+                        .unwrap_or_default()
                 } else {
                     total
                 };
                 total
             }
         };
+        TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), 0.3,));
         let messages = match request.page_operation {
             PageOp::Next => match request.offset_partition {
                 (0, 0) => mrepo
-                .find_messages(request.clone().page_size, request.clone().search)
-                .unwrap(),
+                    .find_messages(request.clone().page_size, request.clone().search)
+                    .unwrap(),
                 offset_partition => mrepo
-                .find_next_messages(request.page_size, offset_partition, request.clone().search)
-                .unwrap(),
+                    .find_next_messages(request.page_size, offset_partition, request.clone().search)
+                    .unwrap(),
             },
             PageOp::Prev => mrepo
-            .find_prev_messages(
-                request.page_size,
-                request.offset_partition,
-                request.clone().search,
-            )
-            .unwrap(),
+                .find_prev_messages(
+                    request.page_size,
+                    request.offset_partition,
+                    request.clone().search,
+                )
+                .unwrap(),
         };
+        TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), 0.4,));
         Ok(MessagesResponse {
+            task: Some(task),
             total,
             messages,
             topic: Some(topic),
@@ -230,15 +244,19 @@ impl MessagesWorker {
     ) -> Result<MessagesResponse, ExternalError> {
         let kafka = KafkaBackend::new(&request.connection);
         let topic = &request.topic.name;
+        let task = request.task.clone().unwrap();
+        TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), 0.1,));
         // Run async background task
         let messages = kafka
-        .list_messages_for_topic(
-            topic,
-            Some(request.fetch.clone()),
-            Some(request.max_messages),
-        )
-        .await?;
+            .list_messages_for_topic(
+                topic,
+                Some(request.fetch.clone()),
+                Some(request.max_messages),
+            )
+            .await?;
+        TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), 0.7,));
         Ok(MessagesResponse {
+            task: Some(task),
             total: messages.len(),
             messages: messages,
             topic: Some(request.topic.clone()),

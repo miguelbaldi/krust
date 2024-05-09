@@ -1,4 +1,3 @@
-#![allow(deprecated)]
 use adw::prelude::*;
 use gtk::gdk::DisplayManager;
 use relm4::*;

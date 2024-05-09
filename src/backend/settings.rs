@@ -3,7 +3,7 @@ use std::fs::File;
 use std::path::PathBuf;
 use tracing::*;
 
-use crate::config::{ensure_app_config_dir, ExternalError};
+use crate::{config::{ensure_app_config_dir, ExternalError}, DATE_TIME_FORMAT, DATE_TIME_WITH_MILLIS_FORMAT};
 
 /// Application global settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,6 +11,7 @@ use crate::config::{ensure_app_config_dir, ExternalError};
 pub struct Settings {
     /// cache directory as string.
     pub cache_dir: String,
+    pub is_full_timestamp: bool,
 }
 
 impl Settings {
@@ -45,6 +46,13 @@ impl Settings {
             )
         })
     }
+    pub fn timestamp_formatter(&self) -> String {
+        if self.is_full_timestamp {
+            DATE_TIME_WITH_MILLIS_FORMAT
+        } else {
+            DATE_TIME_FORMAT
+        }.to_string()
+    }
 }
 
 impl Default for Settings {
@@ -55,6 +63,7 @@ impl Default for Settings {
             .expect("should get default cache path");
         Settings {
             cache_dir: default_cache_dir,
+            is_full_timestamp: false,
         }
     }
 }
