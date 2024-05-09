@@ -1,13 +1,9 @@
 use crate::{
-    backend::
-        repository::{KrustConnection, KrustTopic}
-    ,
+    backend::repository::{KrustConnection, KrustTopic},
     component::topics::topics_tab::{TopicsTabInit, TopicsTabOutput},
 };
 use adw::{prelude::*, TabPage};
-use relm4::{
-    actions::RelmAction, factory::FactoryVecDeque, *
-};
+use relm4::{actions::RelmAction, factory::FactoryVecDeque, *};
 use tracing::*;
 
 use super::topics_tab::TopicsTabModel;
@@ -93,7 +89,9 @@ impl Component for TopicsPageModel {
         let topics = FactoryVecDeque::builder()
             .launch(adw::TabView::default())
             .forward(sender.output_sender(), |msg| match msg {
-                TopicsTabOutput::OpenMessagesPage(conn, topic) => TopicsPageOutput::OpenMessagesPage(conn, topic),
+                TopicsTabOutput::OpenMessagesPage(conn, topic) => {
+                    TopicsPageOutput::OpenMessagesPage(conn, topic)
+                }
             });
 
         let topics_viewer: &adw::TabView = topics.widget();
@@ -109,7 +107,8 @@ impl Component for TopicsPageModel {
 
         let widgets = view_output!();
 
-        let mut topics_tabs_actions = relm4::actions::RelmActionGroup::<ConnectionTabActionGroup>::new();
+        let mut topics_tabs_actions =
+            relm4::actions::RelmActionGroup::<ConnectionTabActionGroup>::new();
         let tabs_sender = sender.input_sender().clone();
         let close_tab_action = RelmAction::<CloseTabAction>::new_stateless(move |_| {
             tabs_sender.send(TopicsPageMsg::MenuPageClosed).unwrap();
@@ -130,7 +129,11 @@ impl Component for TopicsPageModel {
         };
         ComponentParts { model, widgets }
     }
+    fn post_view(&self, widgets: &mut Self::Widgets) {
 
+        //widgets.topics_tabs.remove_css_class(&css_class);
+        //widgets.topics_tabs.add_css_class(&css_class);
+    }
     fn update_with_view(
         &mut self,
         widgets: &mut Self::Widgets,
@@ -170,12 +173,10 @@ impl Component for TopicsPageModel {
             }
             TopicsPageMsg::PageAdded(page, index) => {
                 let tab_model = self.topics.get(index.try_into().unwrap()).unwrap();
-                let title = format!(
-                    "{}",
-                    tab_model.current.clone().unwrap().name,
-                );
+                let title = format!("{}", tab_model.current.clone().unwrap().name,);
                 page.set_title(title.as_str());
                 page.set_live_thumbnail(true);
+
                 widgets.topics_viewer.set_selected_page(&page);
             }
             TopicsPageMsg::MenuPagePin => {
@@ -194,10 +195,7 @@ impl Component for TopicsPageModel {
                     for i in 0..topics.len() {
                         let tp = topics.get_mut(i);
                         if let Some(tp) = tp {
-                            let title = format!(
-                                "{}",
-                                tp.current.clone().unwrap().name.clone(),
-                            );
+                            let title = format!("{}", tp.current.clone().unwrap().name.clone(),);
                             info!("PageClosed [{}][{}={}]", i, title, page.title());
                             if title.eq(&page.title().to_string()) {
                                 idx = Some(i);
@@ -220,5 +218,4 @@ impl Component for TopicsPageModel {
 
         self.update_view(widgets, sender);
     }
-
 }

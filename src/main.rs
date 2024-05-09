@@ -6,6 +6,7 @@ use gtk::gio;
 use gtk::gio::ApplicationFlags;
 use gtk::prelude::ApplicationExt;
 use krust::APP_RESOURCE_PATH;
+use krust::TOASTER_BROKER;
 use tracing::*;
 use tracing_subscriber::filter;
 use tracing_subscriber::prelude::*;
@@ -84,7 +85,7 @@ fn main() -> Result<(), ()> {
 
     setup_shortcuts(&app);
 
-    let app = RelmApp::from_app(app);
+    let app = RelmApp::from_app(app).with_broker(&TOASTER_BROKER);
     app.set_global_css(include_str!("styles.less"));
     info!("running application");
     app.visible_on_activate(false).run::<AppModel>(());

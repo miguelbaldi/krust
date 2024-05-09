@@ -16,6 +16,7 @@ pub use component::app::AppModel;
 pub use component::app::AppMsg;
 pub use backend::repository::Repository;
 pub use component::messages::messages_tab::MessagesSearchAction;
+pub use component::app::TOASTER_BROKER;
 
 pub const KRUST_QUALIFIER: &str = "io";
 pub const KRUST_ORGANIZATION: &str = "miguelbaldi";

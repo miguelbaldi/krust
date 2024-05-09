@@ -1,5 +1,6 @@
 #![allow(deprecated)]
 use std::borrow::Borrow;
+use std::str::FromStr;
 
 // See: https://gitlab.gnome.org/GNOME/gtk/-/issues/5644
 use chrono::{TimeZone, Utc};
@@ -21,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace};
 
 use crate::backend::settings::Settings;
-use crate::component::banner::{AppBannerMsg, BANNER_BROKER};
+use crate::component::settings_dialog::MessagesSortOrder;
 use crate::component::task_manager::{Task, TaskManagerMsg, TaskVariant, TASK_MANAGER_BROKER};
 use crate::{
     backend::{
@@ -41,6 +42,7 @@ use crate::{
     },
     Repository,
 };
+use crate::{AppMsg, TOASTER_BROKER};
 
 use super::message_viewer::{MessageViewerModel, MessageViewerMsg};
 use super::messages_send_dialog::MessagesSendDialogMsg;
@@ -111,7 +113,7 @@ pub enum CommandMsg {
     CopyToClipboard(String),
 }
 
-const AVAILABLE_PAGE_SIZES: [u16; 6] = [50, 100, 500, 1000, 2000, 5000];
+const AVAILABLE_PAGE_SIZES: [u16; 7] = [1000, 2000, 5000, 7000, 10000, 20000, 50000];
 
 #[relm4::factory(pub)]
 impl FactoryComponent for MessagesTabModel {
@@ -158,6 +160,7 @@ impl FactoryComponent for MessagesTabModel {
                         set_hexpand: true,
                         #[name(btn_get_messages)]
                         gtk::Button {
+                            set_tooltip_text: Some("Show messages"),
                             set_icon_name: "media-playback-start-symbolic",
                             connect_clicked[sender] => move |_| {
                                 sender.input(MessagesTabMsg::GetMessages);
@@ -165,6 +168,7 @@ impl FactoryComponent for MessagesTabModel {
                         },
                         #[name(btn_stop_messages)]
                         gtk::Button {
+                            set_tooltip_text: Some("Stop current task"),
                             set_icon_name: "media-playback-stop-symbolic",
                             set_margin_start: 5,
                             connect_clicked[sender] => move |_| {
@@ -173,6 +177,7 @@ impl FactoryComponent for MessagesTabModel {
                         },
                         #[name(btn_cache_refresh)]
                         gtk::Button {
+                            set_tooltip_text: Some("Refresh cache"),
                             set_icon_name: "media-playlist-repeat-symbolic",
                             set_margin_start: 5,
                             connect_clicked[sender] => move |_| {
@@ -181,6 +186,7 @@ impl FactoryComponent for MessagesTabModel {
                         },
                         #[name(btn_send_messages)]
                         gtk::Button {
+                            set_tooltip_text: Some("Send messages"),
                             set_icon_name: "list-add-symbolic",
                             set_margin_start: 5,
                             connect_clicked[sender] => move |_| {
@@ -198,6 +204,7 @@ impl FactoryComponent for MessagesTabModel {
                         },
                         #[name(cache_timestamp)]
                         gtk::Label {
+                            set_tooltip_text: Some("Last cache refresh timestamp"),
                             set_margin_start: 5,
                             set_label: "",
                             set_visible: false,
@@ -229,6 +236,7 @@ impl FactoryComponent for MessagesTabModel {
                     set_vexpand: true,
                     set_hexpand: true,
                     set_propagate_natural_width: true,
+                    #[name = "messages_view" ]
                     self.messages_wrapper.view.clone() -> gtk::ColumnView {
                         set_vexpand: true,
                         set_hexpand: true,
@@ -564,9 +572,11 @@ impl FactoryComponent for MessagesTabModel {
                     widgets.cached_controls.set_visible(true);
                     widgets.cached_centered_controls.set_visible(true);
                     widgets.live_controls.set_visible(false);
+                    widgets.btn_cache_refresh.set_visible(true);
                     MessagesMode::Cached { refresh: false }
                 } else {
                     widgets.live_controls.set_visible(true);
+                    widgets.btn_cache_refresh.set_visible(false);
                     widgets.cached_controls.set_visible(false);
                     widgets.cached_centered_controls.set_visible(false);
                     widgets.cache_timestamp.set_visible(false);
@@ -687,7 +697,6 @@ impl FactoryComponent for MessagesTabModel {
             }
             MessagesTabMsg::GetMessages => {
                 //sender.output(MessagesTabOutput::ShowBanner("Working...".to_string())).unwrap();
-                BANNER_BROKER.send(AppBannerMsg::Show("Working...".to_string()));
                 STATUS_BROKER.send(StatusBarMsg::Start);
                 on_loading(widgets, false);
                 let mode = self.mode;
@@ -714,25 +723,24 @@ impl FactoryComponent for MessagesTabModel {
                     Some(task_name),
                     Some(self.token.clone()),
                 );
+                TOASTER_BROKER.send(AppMsg::ShowToast(task.id.clone(), "Working...".to_string()));
                 TASK_MANAGER_BROKER.send(TaskManagerMsg::AddTask(task.clone()));
                 sender.oneshot_command(async move {
                     // Run async background task
                     let messages_worker = MessagesWorker::new();
                     let result = &messages_worker
-                        .get_messages(
-                            &MessagesRequest {
-                                task: Some(task),
-                                mode: mode,
-                                connection: conn,
-                                topic: topic.clone(),
-                                page_operation: PageOp::Next,
-                                page_size,
-                                offset_partition: (0, 0),
-                                search: search,
-                                fetch,
-                                max_messages,
-                            },
-                        )
+                        .get_messages(&MessagesRequest {
+                            task: Some(task),
+                            mode: mode,
+                            connection: conn,
+                            topic: topic.clone(),
+                            page_operation: PageOp::Next,
+                            page_size,
+                            offset_partition: (0, 0),
+                            search: search,
+                            fetch,
+                            max_messages,
+                        })
                         .await
                         .unwrap();
                     let total = result.total;
@@ -742,7 +750,6 @@ impl FactoryComponent for MessagesTabModel {
             }
             MessagesTabMsg::GetNextMessages => {
                 STATUS_BROKER.send(StatusBarMsg::Start);
-                BANNER_BROKER.send(AppBannerMsg::Show("Working...".to_string()));
                 on_loading(widgets, false);
                 let mode = self.mode;
                 let topic = self.topic.clone().unwrap();
@@ -778,25 +785,24 @@ impl FactoryComponent for MessagesTabModel {
                     Some(task_name),
                     Some(self.token.clone()),
                 );
+                TOASTER_BROKER.send(AppMsg::ShowToast(task.id.clone(), "Working...".to_string()));
                 TASK_MANAGER_BROKER.send(TaskManagerMsg::AddTask(task.clone()));
                 sender.oneshot_command(async move {
                     // Run async background task
                     let messages_worker = MessagesWorker::new();
                     let result = &messages_worker
-                        .get_messages(
-                            &MessagesRequest {
-                                task: Some(task.clone()),
-                                mode: mode,
-                                connection: conn,
-                                topic: topic.clone(),
-                                page_operation: PageOp::Next,
-                                page_size,
-                                offset_partition: (offset, partition),
-                                search: search,
-                                fetch,
-                                max_messages,
-                            },
-                        )
+                        .get_messages(&MessagesRequest {
+                            task: Some(task.clone()),
+                            mode: mode,
+                            connection: conn,
+                            topic: topic.clone(),
+                            page_operation: PageOp::Next,
+                            page_size,
+                            offset_partition: (offset, partition),
+                            search: search,
+                            fetch,
+                            max_messages,
+                        })
                         .await
                         .unwrap();
                     let total = result.total;
@@ -806,7 +812,6 @@ impl FactoryComponent for MessagesTabModel {
             }
             MessagesTabMsg::GetPreviousMessages => {
                 STATUS_BROKER.send(StatusBarMsg::Start);
-                BANNER_BROKER.send(AppBannerMsg::Show("Working...".to_string()));
                 on_loading(widgets, false);
                 let mode = self.mode;
                 let topic = self.topic.clone().unwrap();
@@ -838,25 +843,24 @@ impl FactoryComponent for MessagesTabModel {
                     Some(task_name),
                     Some(self.token.clone()),
                 );
+                TOASTER_BROKER.send(AppMsg::ShowToast(task.id.clone(), "Working...".to_string()));
                 TASK_MANAGER_BROKER.send(TaskManagerMsg::AddTask(task.clone()));
                 sender.oneshot_command(async move {
                     // Run async background task
                     let messages_worker = MessagesWorker::new();
                     let result = &messages_worker
-                        .get_messages(
-                            &MessagesRequest {
-                                task: Some(task.clone()),
-                                mode:mode,
-                                connection: conn,
-                                topic: topic.clone(),
-                                page_operation: PageOp::Prev,
-                                page_size,
-                                offset_partition: (offset, partition),
-                                search: search,
-                                fetch,
-                                max_messages,
-                            },
-                        )
+                        .get_messages(&MessagesRequest {
+                            task: Some(task.clone()),
+                            mode: mode,
+                            connection: conn,
+                            topic: topic.clone(),
+                            page_operation: PageOp::Prev,
+                            page_size,
+                            offset_partition: (offset, partition),
+                            search: search,
+                            fetch,
+                            max_messages,
+                        })
                         .await
                         .unwrap();
                     let total = result.total;
@@ -878,7 +882,8 @@ impl FactoryComponent for MessagesTabModel {
                 });
             }
             MessagesTabMsg::UpdateMessages(response) => {
-                let timestamp_formatter = Settings::read().unwrap_or_default().timestamp_formatter();
+                let settings = Settings::read().unwrap_or_default();
+                let timestamp_formatter = settings.timestamp_formatter();
                 let total = response.total;
                 self.topic = response.topic.clone();
                 match self.mode {
@@ -894,6 +899,25 @@ impl FactoryComponent for MessagesTabModel {
                     response.messages.first(),
                     response.messages.last(),
                 );
+                let sort_column = settings.messages_sort_column;
+                let sort_column = self
+                    .messages_wrapper
+                    .get_columns()
+                    .get(sort_column.as_str());
+                let sort_order =
+                    MessagesSortOrder::from_str(settings.messages_sort_column_order.as_str())
+                        .unwrap_or_default();
+                let sort_type = match sort_order {
+                    MessagesSortOrder::Ascending => gtk::SortType::Ascending,
+                    MessagesSortOrder::Descending => gtk::SortType::Descending,
+                    MessagesSortOrder::Default => match self.fetch_type {
+                        KafkaFetch::Newest => gtk::SortType::Descending,
+                        KafkaFetch::Oldest => gtk::SortType::Ascending,
+                    },
+                };
+
+                info!("sort_column::{:?}, sort_type::{:?}", sort_column, sort_type);
+                widgets.messages_view.sort_by_column(sort_column, sort_type);
                 self.messages_wrapper.extend_from_iter(
                     response
                         .messages
@@ -915,7 +939,7 @@ impl FactoryComponent for MessagesTabModel {
                     .unwrap_or(String::default());
                 widgets.cache_timestamp.set_label(&cache_ts);
                 widgets.cache_timestamp.set_visible(true);
-                BANNER_BROKER.send(AppBannerMsg::Hide);
+                TOASTER_BROKER.send(AppMsg::HideToast(response.task.clone().unwrap().id.clone()));
                 STATUS_BROKER.send(StatusBarMsg::StopWithInfo {
                     text: Some(format!("{} messages loaded!", self.messages_wrapper.len())),
                 });
@@ -1061,11 +1085,12 @@ fn copy_all_as_csv(
             Err(_) => value.replace('\n', ""),
         };
         let timestamp = item.borrow().timestamp;
-        let timestamp = Utc.timestamp_millis_opt(timestamp.unwrap_or_default())
-                .unwrap()
-                .with_timezone(&America::Sao_Paulo)
-                .format(&timestamp_format)
-                .to_string();
+        let timestamp = Utc
+            .timestamp_millis_opt(timestamp.unwrap_or_default())
+            .unwrap()
+            .with_timezone(&America::Sao_Paulo)
+            .format(&timestamp_format)
+            .to_string();
         let record = StringRecord::from(vec![
             partition.to_string(),
             offset.to_string(),
