@@ -6,5 +6,6 @@ pub mod topics;
 
 pub(crate) mod connection_list;
 mod connection_page;
-mod settings_page;
+pub(crate) mod settings_dialog;
 mod status_bar;
+pub(crate) mod task_manager;

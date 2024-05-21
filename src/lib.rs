@@ -16,6 +16,7 @@ pub use component::app::AppModel;
 pub use component::app::AppMsg;
 pub use backend::repository::Repository;
 pub use component::messages::messages_tab::MessagesSearchAction;
+pub use component::app::TOASTER_BROKER;
 
 pub const KRUST_QUALIFIER: &str = "io";
 pub const KRUST_ORGANIZATION: &str = "miguelbaldi";
@@ -25,4 +26,5 @@ pub const APP_RESOURCE_PATH: &str = "/io/miguelbaldi/KRust/";
 pub const APP_NAME: &str = "KRust Kafka Client";
 pub const VERSION: &str = env!("VERGEN_GIT_DESCRIBE");
 pub const DATE_TIME_FORMAT: &str = "%d/%m/%Y %H:%M:%S";
+pub const DATE_TIME_WITH_MILLIS_FORMAT: &str = "%d/%m/%Y %H:%M:%S%.3f";
 pub const LOGO_SIZE: i32 = 800;

@@ -11,6 +11,7 @@ use rdkafka::{Message, Offset};
 
 use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tracing::{debug, info, trace, warn};
 
@@ -396,7 +397,13 @@ impl KafkaBackend {
         let context = CustomContext;
         let consumer: LoggingConsumer = self.consumer(context).expect("Consumer creation failed");
         let conn = mrepo.get_connection();
-        let mut counter = 0;
+        let counter: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+        let handler_counter = counter.clone();
+        conn.progress_handler(i32::try_from(total).unwrap_or(i32::MAX), Some(move || {
+            let count = handler_counter.lock().unwrap();
+            trace!("cache_messages_for_topic::progress::{}/{}", count, &total);
+            false
+        }));
 
         info!("consumer created");
         match partitions {
@@ -427,7 +434,7 @@ impl KafkaBackend {
             }
         };
 
-        while counter < total {
+        while (*counter.lock().unwrap() as usize) < total {
             match consumer.recv().await {
                 Err(e) => warn!("Kafka error: {}", e),
                 Ok(m) => {
@@ -481,7 +488,8 @@ impl KafkaBackend {
                             err.to_string()
                         ),
                     };
-                    counter += 1;
+                    let mut num = counter.lock().unwrap();
+                    *num += 1;
                 }
             };
         }

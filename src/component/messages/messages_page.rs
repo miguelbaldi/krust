@@ -95,13 +95,6 @@ impl Component for MessagesPageModel {
         topics_viewer.connect_page_attached(move |_tab_view, page, n| {
             tabs_sender.input(MessagesPageMsg::PageAdded(page.clone(), n));
         });
-        // let tabs_sender = sender.clone();
-        // topics_viewer.connect_close_page(move |_tab_view, page| {
-        //     //&topics_viewer.close_page_finish(&page, true);
-        //     tabs_sender.input(MessagesPageMsg::PageClosed(page.clone()));
-        //     true
-        // });
-
 
         let widgets = view_output!();
 

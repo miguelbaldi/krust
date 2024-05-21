@@ -36,6 +36,7 @@ pub struct KrustConnection {
     pub sasl_mechanism: Option<String>,
     pub sasl_username: Option<String>,
     pub sasl_password: Option<String>,
+    pub color: Option<String>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq)]
 pub struct Partition {
@@ -416,11 +417,45 @@ impl Repository {
             .map_err(ExternalError::DatabaseError).unwrap_or_else(|e| {
                 warn!("kr_topic.favourite: {:?}", e);
             });
+        let _result_add_connection_color = self
+            .conn
+            .execute_batch(
+                "
+        ALTER TABLE kr_connection ADD COLUMN color TEXT DEFAULT NULL;
+        ",
+            )
+            .map_err(ExternalError::DatabaseError).unwrap_or_else(|e| {
+                warn!("kr_topic.favourite: {:?}", e);
+            });
         Ok(())
     }
 
+    pub fn connection_by_id(&mut self, id: usize) -> Option<KrustConnection> {
+        let mut stmt = self.conn.prepare_cached("SELECT id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword, color FROM kr_connection WHERE id = ?").expect("Should return prepared statement");
+        let rows = stmt
+            .query_row(params![id], |row| {
+                Ok(KrustConnection {
+                    id: row.get(0).unwrap_or(None),
+                    name: row.get(1).unwrap_or_default(),
+                    brokers_list: row.get(2).unwrap_or_default(),
+                    security_type: KrustConnectionSecurityType::from_str(
+                        row.get::<usize, String>(3).unwrap_or_default().as_str(),
+                    )
+                    .unwrap_or_default(),
+                    sasl_mechanism: row.get(4).unwrap_or(None),
+                    sasl_username: row.get(5).unwrap_or(None),
+                    sasl_password: row.get(6).unwrap_or(None),
+                    color: row.get(7).unwrap_or(None),
+                })
+            })
+            .map_err(ExternalError::DatabaseError);
+        match rows {
+            Ok(conn) => Some(conn),
+            Err(_) => None,
+        }
+    }
     pub fn list_all_connections(&mut self) -> Result<Vec<KrustConnection>, ExternalError> {
-        let mut stmt = self.conn.prepare_cached("SELECT id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword from kr_connection")?;
+        let mut stmt = self.conn.prepare_cached("SELECT id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword, color FROM kr_connection ORDER BY name")?;
         let rows = stmt
             .query_map([], |row| {
                 Ok(KrustConnection {
@@ -434,6 +469,7 @@ impl Repository {
                     sasl_mechanism: row.get(4)?,
                     sasl_username: row.get(5)?,
                     sasl_password: row.get(6)?,
+                    color: row.get(7)?,
                 })
             })
             .map_err(ExternalError::DatabaseError)?;
@@ -455,8 +491,9 @@ impl Repository {
         let sasl = konn.sasl_mechanism.clone();
         let sasl_username = konn.sasl_username.clone();
         let sasl_password = konn.sasl_password.clone();
-        let mut stmt_by_id = self.conn.prepare_cached("SELECT id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword from kr_connection where id = ?1")?;
-        let mut stmt_by_name = self.conn.prepare_cached("SELECT id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword from kr_connection where name = ?1")?;
+        let color = konn.color.clone();
+        let mut stmt_by_id = self.conn.prepare_cached("SELECT id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword, color from kr_connection where id = ?1")?;
+        let mut stmt_by_name = self.conn.prepare_cached("SELECT id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword, color from kr_connection where name = ?1")?;
         let row_to_model = move |row: &Row<'_>| {
             Ok(KrustConnection {
                 id: row.get(0)?,
@@ -469,6 +506,7 @@ impl Repository {
                 sasl_mechanism: row.get(4)?,
                 sasl_username: row.get(5)?,
                 sasl_password: row.get(6)?,
+                color: row.get(7)?,
             })
         };
         let maybe_konn = match id {
@@ -482,14 +520,14 @@ impl Repository {
 
         match maybe_konn {
             Ok(konn_to_update) => {
-                let mut up_stmt = self.conn.prepare_cached("UPDATE kr_connection SET name = :name, brokersList = :brokers, securityType = :security, saslMechanism = :sasl, saslUsername = :sasl_u, saslPassword = :sasl_p WHERE id = :id")?;
+                let mut up_stmt = self.conn.prepare_cached("UPDATE kr_connection SET name = :name, brokersList = :brokers, securityType = :security, saslMechanism = :sasl, saslUsername = :sasl_u, saslPassword = :sasl_p, color = :color WHERE id = :id")?;
                 up_stmt
-                .execute(named_params! { ":id": &konn_to_update.id.unwrap(), ":name": &name, ":brokers": &brokers, ":security": security.to_string(), ":sasl": &sasl, ":sasl_u": &sasl_username, ":sasl_p": &sasl_password })
+                .execute(named_params! { ":id": &konn_to_update.id.unwrap(), ":name": &name, ":brokers": &brokers, ":security": security.to_string(), ":sasl": &sasl, ":sasl_u": &sasl_username, ":sasl_p": &sasl_password, ":color": &color })
                 .map_err(ExternalError::DatabaseError)
-                .map( |_| {KrustConnection { id: konn_to_update.id, name, brokers_list: brokers, security_type: security, sasl_mechanism: sasl, sasl_username, sasl_password }})
+                .map( |_| {KrustConnection { id: konn_to_update.id, name, brokers_list: brokers, security_type: security, sasl_mechanism: sasl, sasl_username, sasl_password, color }})
             }
             Err(_) => {
-                let mut ins_stmt = self.conn.prepare_cached("INSERT INTO kr_connection (id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword) VALUES (?, ?, ?, ?, ?, ?, ?)  RETURNING id")?;
+                let mut ins_stmt = self.conn.prepare_cached("INSERT INTO kr_connection (id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword, color) VALUES (?, ?, ?, ?, ?, ?, ?, ?)  RETURNING id")?;
                 ins_stmt
                     .query_row(
                         params![
@@ -500,6 +538,7 @@ impl Repository {
                             &konn.sasl_mechanism,
                             &konn.sasl_username,
                             &konn.sasl_password,
+                            &konn.color,
                         ],
                         |row| {
                             Ok(KrustConnection {
@@ -510,6 +549,7 @@ impl Repository {
                                 sasl_mechanism: sasl,
                                 sasl_username,
                                 sasl_password,
+                                color
                             })
                         },
                     )
@@ -566,6 +606,20 @@ impl Repository {
 
         stmt_by_id
             .execute(named_params! { ":cid": &conn_id, ":topic": &name.clone(),})
+            .map_err(ExternalError::DatabaseError)
+    }
+
+    pub fn delete_connection(
+        &mut self,
+        conn_id: usize,
+    ) -> Result<usize, ExternalError> {
+        let mut stmt_by_id = self.conn.prepare_cached(
+            "DELETE FROM kr_connection
+            WHERE id = :cid",
+        )?;
+
+        stmt_by_id
+            .execute(named_params! { ":cid": &conn_id,})
             .map_err(ExternalError::DatabaseError)
     }
 
