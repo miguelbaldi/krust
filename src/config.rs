@@ -1,4 +1,5 @@
 use directories::ProjectDirs;
+use rdkafka::error::KafkaError;
 use ron::de::SpannedError;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,8 @@ pub enum ExternalError {
     FileSystemError(#[from] std::io::Error),
     #[error(transparent)]
     DatabaseError(#[from] rusqlite::Error),
+    #[error(transparent)]
+    KafkaUnexpectedError(#[from] KafkaError),
     #[error("headers serialization error")]
     HeadersError(#[from] SpannedError),
     #[error("configuration error: `{0}`")]

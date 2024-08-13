@@ -5,15 +5,10 @@ use std::{collections::HashMap, time::Duration};
 use adw::{prelude::*, Toast};
 use gtk::glib;
 use relm4::{
-    abstractions::Toaster,
-    actions::{RelmAction, RelmActionGroup},
-    factory::FactoryVecDeque,
-    main_adw_application,
-    prelude::*,
-    MessageBroker,
+    abstractions::Toaster, actions::{RelmAction, RelmActionGroup}, factory::FactoryVecDeque, main_adw_application, main_application, prelude::*, MessageBroker
 };
 use relm4_components::alert::{Alert, AlertMsg, AlertResponse, AlertSettings};
-use tracing::{error, info, warn};
+use tracing::*;
 
 use crate::{
     backend::repository::{KrustConnection, KrustTopic, Repository},
@@ -49,6 +44,7 @@ pub enum AppMsg {
     ShowTopicsPage(KrustConnection),
     ShowTopicsPageByIndex(i32),
     ShowMessagesPage(KrustConnection, KrustTopic),
+    HandleTopicsError(KrustConnection, bool),
     RemoveConnection(DynamicIndex, KrustConnection),
     ShowSettings,
     SavedSettings,
@@ -266,6 +262,9 @@ impl Component for AppModel {
                 TopicsPageOutput::OpenMessagesPage(connection, topic) => {
                     AppMsg::ShowMessagesPage(connection, topic)
                 }
+                TopicsPageOutput::HandleError(conn, disconnect) => {
+                    AppMsg::HandleTopicsError(conn, disconnect)
+                }
             });
 
         let messages_page: Controller<MessagesPageModel> = MessagesPageModel::builder()
@@ -344,6 +343,41 @@ impl Component for AppModel {
             settings_dialog,
         };
         widgets.load_window_size();
+        // DEBUG: start
+        let main_window = main_application().active_window().unwrap();
+        let surface = main_window.surface();
+        if let Some(surface) = surface {
+            let toplevel =  surface.downcast::<gtk::gdk::Toplevel>();
+            if let Ok(toplevel) = toplevel {
+                info!("TOPLEVEL::{:?}", toplevel);
+                toplevel.connect_layout(|_surface, width, height|{
+                    trace!("TOPLEVEL::LAYOUT::[width={},height={}]", width, height);
+                });
+                toplevel.connect_enter_monitor(|_surface, monitor| {
+                    trace!("TOPLEVEL::ENTER_MONITOR::[monitor={:?}]", monitor);
+                    if let Some(description) = monitor.description() {
+                        trace!("TOPLEVEL::ENTER_MONITOR::[description={}]", description.to_string());
+                    }
+                    if let Some(connector) = monitor.connector() {
+                        trace!("TOPLEVEL::ENTER_MONITOR::[connector={}]", connector.to_string());
+                    }
+                });
+                toplevel.connect_leave_monitor(|_surface, monitor| {
+                    trace!("TOPLEVEL::LEAVE_MONITOR::[monitor={:?}]", monitor);
+                    if let Some(description) = monitor.description() {
+                        trace!("TOPLEVEL::LEAVE_MONITOR::[description={}]", description.to_string());
+                    }
+                    if let Some(connector) = monitor.connector() {
+                        trace!("TOPLEVEL::LEAVE_MONITOR::[connector={}]", connector.to_string());
+                    }
+                });
+                // toplevel.connect_compute_size(|tl, cs| {
+                //     let bounds = cs.bounds();
+                //     info!("TOPLEVEL::BOUNDS::{:?}", bounds);
+                // });
+            }
+        };
+        // DEBUG: end
         ComponentParts { model, widgets }
     }
 
@@ -476,6 +510,19 @@ impl Component for AppModel {
             AppMsg::ShowSettings => {
                 info!("|-->Showing settings dialog");
                 self.settings_dialog.emit(SettingsDialogMsg::Show);
+            }
+            AppMsg::HandleTopicsError(conn, disconnect) => {
+                self.topics_page.emit(TopicsPageMsg::MenuPageClosed);
+                if disconnect {
+                    for c in self.connections.guard().iter_mut() {
+                        info!("Looking for connections::{}={:?}", conn.name, c);
+                        if c.name == conn.name {
+                            c.is_connected = false;
+                            break;
+                        }
+                    }
+                    self.connections.broadcast(KrustConnectionMsg::Refresh);
+                };
             }
         }
         self.update_view(widgets, sender);

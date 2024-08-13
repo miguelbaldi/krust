@@ -7,6 +7,7 @@ use crate::{
     },
     component::status_bar::{StatusBarMsg, STATUS_BROKER},
     config::ExternalError,
+    modals::utils::show_error_alert,
     Repository,
 };
 use gtk::{glib::SignalHandlerId, prelude::*};
@@ -15,9 +16,7 @@ use relm4::{
     typed_view::column::{LabelColumn, RelmColumn, TypedColumnView},
     *,
 };
-use tracing::{debug, info};
-
-
+use tracing::{debug, error, info};
 
 relm4::new_action_group!(pub(super) TopicListActionGroup, "topic-list");
 relm4::new_stateless_action!(pub(super) FavouriteAction, TopicListActionGroup, "toggle-favourite");
@@ -180,12 +179,14 @@ pub enum TopicsTabMsg {
 #[derive(Debug)]
 pub enum TopicsTabOutput {
     OpenMessagesPage(KrustConnection, KrustTopic),
+    HandleError(KrustConnection, bool),
 }
 
 #[derive(Debug)]
 pub enum CommandMsg {
     // Data(Vec<KrustMessage>),
     ListFinished(Vec<KrustTopic>),
+    ShowError(ExternalError),
 }
 
 impl TopicsTabModel {
@@ -216,6 +217,7 @@ impl FactoryComponent for TopicsTabModel {
 
     view! {
         #[root]
+        #[name(root)]
         gtk::Box {
             set_orientation: gtk::Orientation::Vertical,
             set_hexpand: true,
@@ -322,20 +324,37 @@ impl FactoryComponent for TopicsTabModel {
                 STATUS_BROKER.send(StatusBarMsg::Start);
                 self.topics_wrapper.clear();
                 self.current = Some(conn.clone());
-                let topics_map = self.fetch_persited_topics().unwrap();
-
-                sender.oneshot_command(async move {
-                    let kafka = KafkaBackend::new(&conn);
-                    let mut topics = kafka.list_topics().await;
-                    for topic in topics.iter_mut() {
-                        if let Some(t) = topics_map.get(&topic.name) {
-                            debug!("found topic: {:?}", t);
-                            topic.favourite = t.favourite;
-                            topic.cached = t.cached;
-                        }
+                let result_topics_map = self.fetch_persited_topics();
+                let output = sender.output_sender().clone();
+                match result_topics_map {
+                    Ok(topics_map) => {
+                        sender.oneshot_command(async move {
+                            let kafka = KafkaBackend::new(&conn);
+                            info!("Trying to list topics...");
+                            let topics_result = kafka.list_topics().await;
+                            match topics_result {
+                                Ok(mut topics) => {
+                                    for topic in topics.iter_mut() {
+                                        if let Some(t) = topics_map.get(&topic.name) {
+                                            debug!("found topic: {:?}", t);
+                                            topic.favourite = t.favourite;
+                                            topic.cached = t.cached;
+                                        }
+                                    }
+                                    CommandMsg::ListFinished(topics)
+                                }
+                                Err(error) => {
+                                    output.emit(TopicsTabOutput::HandleError(conn.clone(), true));
+                                    CommandMsg::ShowError(error)
+                                }
+                            }
+                        });
                     }
-                    CommandMsg::ListFinished(topics)
-                });
+                    Err(err) => {
+                        sender.output_sender().emit(TopicsTabOutput::HandleError(conn.clone(), true));
+                        sender.command_sender().emit(CommandMsg::ShowError(err));
+                    }
+                };
             }
             TopicsTabMsg::OpenTopic(idx) => {
                 let item = self.topics_wrapper.get_visible(idx).unwrap();
@@ -429,6 +448,11 @@ impl FactoryComponent for TopicsTabModel {
                 STATUS_BROKER.send(StatusBarMsg::StopWithInfo {
                     text: Some("Topics loaded!".into()),
                 });
+            }
+            CommandMsg::ShowError(error) => {
+                let error_message = format!("Error connecting: {}", error);
+                error!(error_message);
+                show_error_alert(&widgets.root, error_message);
             }
         }
     }

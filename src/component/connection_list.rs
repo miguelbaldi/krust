@@ -158,6 +158,7 @@ impl FactoryComponent for ConnectionListModel {
                 info!("Disconnect request for {}", self.name);
                 let css_class = format!("custom_color_{}", self.id.unwrap());
                 widgets.connect_button.remove_css_class(&css_class);
+                widgets.connect_button.set_active(false);
                 self.is_connected = false;
             }
             KrustConnectionMsg::Edit(index) => {
@@ -193,6 +194,8 @@ impl FactoryComponent for ConnectionListModel {
                     );
                     widgets.connect_button.remove_css_class(&css_class);
                     widgets.connect_button.add_css_class(&css_class);
+                } else {
+                    sender.input_sender().emit(KrustConnectionMsg::Disconnect);
                 };
             }
         }

@@ -8,7 +8,7 @@ use chrono_tz::America;
 use csv::StringRecord;
 use gtk::prelude::*;
 use gtk::{
-    gdk::{DisplayManager, Rectangle},
+    gdk::Rectangle,
     ColumnViewSorter,
 };
 use relm4::{
@@ -19,7 +19,8 @@ use relm4::{
 };
 use relm4_components::simple_combo_box::SimpleComboBox;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, trace};
+use tracing::{info, trace, warn};
+use uuid::Uuid;
 
 use crate::backend::settings::Settings;
 use crate::component::settings_dialog::MessagesSortOrder;
@@ -47,6 +48,8 @@ use crate::{AppMsg, TOASTER_BROKER};
 use super::message_viewer::{MessageViewerModel, MessageViewerMsg};
 use super::messages_send_dialog::MessagesSendDialogMsg;
 use super::{lists::MessageKeyColumn, messages_send_dialog::MessagesSendDialogModel};
+use humansize::{format_size, DECIMAL};
+use copypasta::{ClipboardContext, ClipboardProvider};
 
 // page actions
 relm4::new_action_group!(pub MessagesPageActionGroup, "messages_page");
@@ -58,7 +61,6 @@ relm4::new_stateless_action!(pub(super) CopyMessagesKeyValue, MessagesListAction
 relm4::new_stateless_action!(pub(super) CopyMessagesValue, MessagesListActionGroup, "copy-messages-value");
 relm4::new_stateless_action!(pub(super) CopyMessagesKey, MessagesListActionGroup, "copy-messages-key");
 
-#[derive(Debug)]
 pub struct MessagesTabModel {
     token: CancellationToken,
     pub topic: Option<KrustTopic>,
@@ -73,6 +75,7 @@ pub struct MessagesTabModel {
     max_messages: f64,
     messages_menu_popover: gtk::PopoverMenu,
     add_messages: Controller<MessagesSendDialogModel>,
+    clipboard: Box<dyn ClipboardProvider>,
 }
 
 pub struct MessagesTabInit {
@@ -110,7 +113,7 @@ pub enum MessagesTabMsg {
 #[derive(Debug)]
 pub enum CommandMsg {
     Data(MessagesResponse),
-    CopyToClipboard(String),
+    CopyToClipboard(String, String),
 }
 
 const AVAILABLE_PAGE_SIZES: [u16; 7] = [1000, 2000, 5000, 7000, 10000, 20000, 50000];
@@ -454,7 +457,7 @@ impl FactoryComponent for MessagesTabModel {
             //.transient_for(main_application())
             .launch((Some(open.connection.clone()), Some(open.topic.clone())))
             .detach();
-
+        let clipboard = Box::new(ClipboardContext::new().unwrap());
         let model = MessagesTabModel {
             token: CancellationToken::new(),
             mode: MessagesMode::Live,
@@ -469,6 +472,7 @@ impl FactoryComponent for MessagesTabModel {
             max_messages: 1000.0,
             messages_menu_popover: messages_popover_menu,
             add_messages: add_messages,
+            clipboard: clipboard,
         };
         let messages_view = &model.messages_wrapper.view;
         let sender_for_selection = sender.clone();
@@ -635,6 +639,8 @@ impl FactoryComponent for MessagesTabModel {
                     }
                 }
                 sender.spawn_oneshot_command(move || {
+                    let id = Uuid::new_v4();
+                    TOASTER_BROKER.send(AppMsg::ShowToast(id.to_string(), "Copying...".to_string()));
                     let data = match copy {
                         Copy::AllAsCsv => copy_all_as_csv(&selected_items),
                         Copy::KeyValue => copy_key_value(&selected_items),
@@ -642,9 +648,9 @@ impl FactoryComponent for MessagesTabModel {
                         Copy::Key => copy_key(&selected_items),
                     };
                     if let Ok(data) = data {
-                        CommandMsg::CopyToClipboard(data)
+                        CommandMsg::CopyToClipboard(id.to_string(), data)
                     } else {
-                        CommandMsg::CopyToClipboard(String::default())
+                        CommandMsg::CopyToClipboard(id.to_string(), String::default())
                     }
                 });
             }
@@ -688,12 +694,20 @@ impl FactoryComponent for MessagesTabModel {
                         let search_term = term.clone();
                         self.messages_wrapper
                             .add_filter(move |item| item.value.contains(search_term.as_str()));
+                        let total = widgets.messages_view.model().unwrap().n_items();
+                        info!("Total messages::{}", total);
+                        fill_pagination(PageOp::Next, widgets, total as usize, 0, None, None);
                     }
                     MessagesMode::Cached { refresh: _ } => (),
                 };
             }
             MessagesTabMsg::SearchMessages => {
-                sender.input(MessagesTabMsg::GetMessages);
+                match self.mode.clone() {
+                    MessagesMode::Live => {
+                        info!("[SearchMessages] Live mode, do nothing");
+                    }
+                    MessagesMode::Cached { refresh: _ } => sender.input(MessagesTabMsg::GetMessages),
+                };
             }
             MessagesTabMsg::GetMessages => {
                 //sender.output(MessagesTabOutput::ShowBanner("Working...".to_string())).unwrap();
@@ -967,13 +981,13 @@ impl FactoryComponent for MessagesTabModel {
     ) {
         match message {
             CommandMsg::Data(messages) => sender.input(MessagesTabMsg::UpdateMessages(messages)),
-            CommandMsg::CopyToClipboard(data) => {
-                info!("setting text to clipboard");
-                DisplayManager::get()
-                    .default_display()
-                    .unwrap()
-                    .clipboard()
-                    .set_text(data.as_str());
+            CommandMsg::CopyToClipboard(id, data) => {
+                let data_size = format_size(data.len(), DECIMAL);
+                info!("setting text to clipboard: {}", data_size);
+                self.clipboard.set_contents(data).unwrap_or_else(|err| {
+                    warn!("Unable to store text in clipboard: {}", err);
+                });
+                TOASTER_BROKER.send(AppMsg::HideToast(id));
             }
         }
     }
@@ -1042,7 +1056,7 @@ fn fill_pagination(
         }
         (_, _) => (),
     }
-    debug!(
+    info!(
         "fill pagination of current page {} of {}",
         current_page, pages
     );

@@ -34,6 +34,7 @@ pub enum TopicsPageMsg {
 #[derive(Debug)]
 pub enum TopicsPageOutput {
     OpenMessagesPage(KrustConnection, KrustTopic),
+    HandleError(KrustConnection, bool),
 }
 
 #[relm4::component(pub)]
@@ -91,6 +92,10 @@ impl Component for TopicsPageModel {
             .forward(sender.output_sender(), |msg| match msg {
                 TopicsTabOutput::OpenMessagesPage(conn, topic) => {
                     TopicsPageOutput::OpenMessagesPage(conn, topic)
+                }
+                TopicsTabOutput::HandleError(conn, disconnect) => {
+                    info!("[topics_page] Handle error: {} - {}", conn.name, disconnect);
+                    TopicsPageOutput::HandleError(conn, disconnect)
                 }
             });
 

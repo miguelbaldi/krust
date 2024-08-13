@@ -209,7 +209,7 @@ impl RelmColumn for MessageValueColumn {
 
     fn setup(_item: &gtk::ListItem) -> (Self::Root, Self::Widgets) {
         let label = gtk::Label::new(None);
-        label.set_halign(gtk::Align::Center);
+        label.set_halign(gtk::Align::Start);
         label.set_ellipsize(gtk::pango::EllipsizeMode::End);
         (label, ())
     }

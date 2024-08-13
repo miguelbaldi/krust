@@ -204,9 +204,14 @@ impl Component for MessagesPageModel {
                     }
                     if let Some(idx) = idx {
                         let result = topics.remove(idx.try_into().unwrap());
+                        let name = if let Some(res) = result {
+                            res.topic.unwrap().name
+                        } else {
+                            String::new()
+                        };
                         info!(
-                            "page model with index {} and name {:?} removed",
-                            idx, result
+                            "page model with index {} and name {} removed",
+                            idx, name
                         );
                     } else {
                         info!("page model not found for removal");

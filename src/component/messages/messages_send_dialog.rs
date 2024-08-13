@@ -385,6 +385,7 @@ impl MessagesSendDialogModel {
         let main_window = main_application().active_window().unwrap();
         let surface = main_window.surface();
         let resolution_based = if let Some(surface) = surface {
+            //let toplevel =  surface.downcast::<gtk::gdk::Toplevel>();
             if let Some(display) = DisplayManager::get().default_display() {
                 if let Some(monitor) = display.monitor_at_surface(&surface) {
                     let height = monitor.geometry().height();

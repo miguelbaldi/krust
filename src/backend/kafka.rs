@@ -20,7 +20,7 @@ use crate::config::ExternalError;
 
 use super::repository::{KrustConnectionSecurityType, KrustTopic, MessagesRepository};
 
-const TIMEOUT: Duration = Duration::from_secs(240);
+const TIMEOUT: Duration = Duration::from_secs(5);
 
 const GROUP_ID: &str = "krust-kafka-client";
 
@@ -157,15 +157,15 @@ impl KafkaBackend {
         }
     }
 
-    pub async fn list_topics(&self) -> Vec<KrustTopic> {
+    pub async fn list_topics(&self) -> Result<Vec<KrustTopic>, ExternalError> {
         let context = CustomContext;
-        let consumer: LoggingConsumer = self.consumer(context).expect("Consumer creation failed");
+        let consumer: LoggingConsumer = self.consumer(context).map_err(ExternalError::KafkaUnexpectedError)?;
 
-        trace!("Consumer created");
+        debug!("Consumer created");
 
         let metadata = consumer
             .fetch_metadata(None, TIMEOUT)
-            .expect("Failed to fetch metadata");
+            .map_err(ExternalError::KafkaUnexpectedError)?;
 
         let mut topics = vec![];
         for topic in metadata.topics() {
@@ -191,7 +191,7 @@ impl KafkaBackend {
                 favourite: None,
             });
         }
-        topics
+        Ok(topics)
     }
 
     pub async fn fetch_partitions(&self, topic: &String) -> Vec<Partition> {
@@ -279,7 +279,7 @@ impl KafkaBackend {
             topic, fetch, max_messages
         );
 
-        let mut message_count: usize = 0;
+        let mut message_count: i64 = 0;
         let partitions = &self.fetch_partitions(topic).await;
         let mut result = current_partitions.clone().unwrap_or_default();
         let cpartitions = &current_partitions.unwrap_or_default().clone();
@@ -312,12 +312,11 @@ impl KafkaBackend {
                         p.offset_low.unwrap()
                     }
                 };
-                message_count += usize::try_from(p.offset_high.unwrap_or_default()).unwrap()
-                    - usize::try_from(low).unwrap();
+                message_count += p.offset_high.unwrap_or_default() - low;
             } else {
                 let (low, high) = match fetch {
                     KafkaFetch::Newest => {
-                        let low = p.offset_high.unwrap_or_default() - max_messages;
+                        let low = p.offset_high.unwrap_or(max_messages) - max_messages;
                         debug!(
                             "Newest::[low={},new_low={},high={},max={}]",
                             p.offset_low.unwrap_or_default(),
@@ -364,7 +363,7 @@ impl KafkaBackend {
                     offset_low: Some(low),
                     offset_high: Some(high),
                 });
-                message_count += usize::try_from(high).unwrap() - usize::try_from(low).unwrap();
+                message_count += high - low;
             };
         }
 
@@ -378,7 +377,7 @@ impl KafkaBackend {
             } else {
                 partitions.clone()
             },
-            total: Some(message_count),
+            total: Some(message_count.try_into().expect("should return the total messages as usize")),
             favourite: None,
         }
     }
@@ -399,11 +398,14 @@ impl KafkaBackend {
         let conn = mrepo.get_connection();
         let counter: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
         let handler_counter = counter.clone();
-        conn.progress_handler(i32::try_from(total).unwrap_or(i32::MAX), Some(move || {
-            let count = handler_counter.lock().unwrap();
-            trace!("cache_messages_for_topic::progress::{}/{}", count, &total);
-            false
-        }));
+        conn.progress_handler(
+            i32::try_from(total).unwrap_or(i32::MAX),
+            Some(move || {
+                let count = handler_counter.lock().unwrap();
+                trace!("cache_messages_for_topic::progress::{}/{}", count, &total);
+                false
+            }),
+        );
 
         info!("consumer created");
         match partitions {
