@@ -115,7 +115,7 @@ impl MessageListItem {
             value: value.value,
             timestamp: value.timestamp,
             headers: value.headers,
-            timestamp_formatter: timestamp_formatter,
+            timestamp_formatter,
         }
     }
 }
@@ -163,7 +163,6 @@ impl LabelColumn for MessagePartitionColumn {
 pub struct MessageTimestampColumn;
 
 impl RelmColumn for MessageTimestampColumn {
-
     type Root = gtk::Label;
     type Widgets = ();
     type Item = MessageListItem;
@@ -182,16 +181,18 @@ impl RelmColumn for MessageTimestampColumn {
         let formatted = format!(
             "{}",
             Utc.timestamp_millis_opt(item.timestamp.unwrap_or_default())
-            .unwrap()
-            .with_timezone(&America::Sao_Paulo)
-            .format(&item.timestamp_formatter)
+                .unwrap()
+                .with_timezone(&America::Sao_Paulo)
+                .format(&item.timestamp_formatter)
         );
         label.set_label(&formatted);
     }
 
     fn sort_fn() -> OrdFn<Self::Item> {
         Some(Box::new(|a: &MessageListItem, b: &MessageListItem| {
-            a.timestamp.unwrap_or_default().cmp(&b.timestamp.unwrap_or_default())
+            a.timestamp
+                .unwrap_or_default()
+                .cmp(&b.timestamp.unwrap_or_default())
         }))
     }
 }
@@ -215,8 +216,7 @@ impl RelmColumn for MessageValueColumn {
     }
 
     fn bind(item: &mut Self::Item, _widgets: &mut Self::Widgets, label: &mut Self::Root) {
-        let formatted = item.value
-                    .replace('\n', " ").clone();
+        let formatted = item.value.replace('\n', " ").clone();
         label.set_label(&formatted);
     }
 }
@@ -237,15 +237,9 @@ impl LabelColumn for MessageKeyColumn {
 
     fn format_cell_value(value: &Self::Value) -> String {
         if value.len() >= 40 {
-            format!(
-                "{}...",
-                value
-                    .replace('\n', " ")
-                    .get(0..40)
-                    .unwrap_or("")
-            )
+            format!("{}...", value.replace('\n', " ").get(0..40).unwrap_or(""))
         } else {
-            format!("{}", value)
+            value.to_string()
         }
     }
 }

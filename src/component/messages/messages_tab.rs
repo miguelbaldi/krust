@@ -7,10 +7,7 @@ use chrono::{TimeZone, Utc};
 use chrono_tz::America;
 use csv::StringRecord;
 use gtk::prelude::*;
-use gtk::{
-    gdk::Rectangle,
-    ColumnViewSorter,
-};
+use gtk::{gdk::Rectangle, ColumnViewSorter};
 use relm4::{
     actions::{RelmAction, RelmActionGroup},
     factory::{DynamicIndex, FactoryComponent},
@@ -23,6 +20,7 @@ use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use crate::backend::settings::Settings;
+use crate::backend::worker::MessagesTotalCounterRequest;
 use crate::component::settings_dialog::MessagesSortOrder;
 use crate::component::task_manager::{Task, TaskManagerMsg, TaskVariant, TASK_MANAGER_BROKER};
 use crate::{
@@ -48,8 +46,8 @@ use crate::{AppMsg, TOASTER_BROKER};
 use super::message_viewer::{MessageViewerModel, MessageViewerMsg};
 use super::messages_send_dialog::MessagesSendDialogMsg;
 use super::{lists::MessageKeyColumn, messages_send_dialog::MessagesSendDialogModel};
-use humansize::{format_size, DECIMAL};
 use copypasta::{ClipboardContext, ClipboardProvider};
+use humansize::{format_size, DECIMAL};
 
 // page actions
 relm4::new_action_group!(pub MessagesPageActionGroup, "messages_page");
@@ -97,7 +95,9 @@ pub enum MessagesTabMsg {
     GetNextMessages,
     GetPreviousMessages,
     StopGetMessages,
-    RefreshMessages,
+    RefreshCache,
+    DestroyCache,
+    RefreshTotalCounter,
     UpdateMessages(MessagesResponse),
     OpenMessage(u32),
     SearchMessages,
@@ -114,6 +114,7 @@ pub enum MessagesTabMsg {
 pub enum CommandMsg {
     Data(MessagesResponse),
     CopyToClipboard(String, String),
+    RefreshTotalCounterResult(String, usize),
 }
 
 const AVAILABLE_PAGE_SIZES: [u16; 7] = [1000, 2000, 5000, 7000, 10000, 20000, 50000];
@@ -184,7 +185,7 @@ impl FactoryComponent for MessagesTabModel {
                             set_icon_name: "media-playlist-repeat-symbolic",
                             set_margin_start: 5,
                             connect_clicked[sender] => move |_| {
-                                sender.input(MessagesTabMsg::RefreshMessages);
+                                sender.input(MessagesTabMsg::RefreshCache);
                             },
                         },
                         #[name(btn_send_messages)]
@@ -194,6 +195,16 @@ impl FactoryComponent for MessagesTabModel {
                             set_margin_start: 5,
                             connect_clicked[sender] => move |_| {
                                 sender.input(MessagesTabMsg::AddMessages);
+                            },
+                        },
+                        #[name(btn_cache_destroy)]
+                        gtk::Button {
+                            set_tooltip_text: Some("Destroy cache"),
+                            set_icon_name: "edit-delete-symbolic",
+                            set_margin_start: 5,
+                            add_css_class: "krust-destroy",
+                            connect_clicked[sender] => move |_| {
+                                sender.input(MessagesTabMsg::DestroyCache);
                             },
                         },
                         #[name(btn_cache_toggle)]
@@ -268,8 +279,9 @@ impl FactoryComponent for MessagesTabModel {
                         set_orientation: gtk::Orientation::Horizontal,
                         set_halign: gtk::Align::Start,
                         set_hexpand: true,
+                        #[name(pag_total_label)]
                         gtk::Label {
-                            set_label: "Total"
+                            set_label: "Messages"
                         },
                         #[name(pag_total_entry)]
                         gtk::Entry {
@@ -284,6 +296,33 @@ impl FactoryComponent for MessagesTabModel {
                         set_orientation: gtk::Orientation::Horizontal,
                         set_halign: gtk::Align::Center,
                         set_hexpand: true,
+                        #[name(live_centered_controls)]
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
+                            set_halign: gtk::Align::Start,
+                            set_hexpand: true,
+                            #[name(total_counter_label)]
+                            gtk::Label {
+                                set_label: "Total",
+                                set_margin_start: 5,
+                            },
+                            #[name(total_counter_entry)]
+                            gtk::Entry {
+                                set_editable: false,
+                                set_sensitive: false,
+                                set_margin_start: 5,
+                                set_width_chars: 10,
+                            },
+                            #[name(btn_total_counter_refresh)]
+                            gtk::Button {
+                                set_tooltip_text: Some("Refresh messages total counter"),
+                                set_icon_name: "media-playlist-repeat-symbolic",
+                                set_margin_start: 5,
+                                connect_clicked[sender] => move |_| {
+                                    sender.input(MessagesTabMsg::RefreshTotalCounter);
+                                },
+                            },
+                        },
                         #[name(cached_centered_controls)]
                         gtk::Box {
                             set_orientation: gtk::Orientation::Horizontal,
@@ -464,15 +503,15 @@ impl FactoryComponent for MessagesTabModel {
             topic: Some(open.topic),
             connection: Some(open.connection),
             messages_wrapper,
-            message_viewer: message_viewer,
+            message_viewer,
             page_size_combo,
             page_size: AVAILABLE_PAGE_SIZES[0],
             fetch_type_combo,
             fetch_type: KafkaFetch::default(),
             max_messages: 1000.0,
             messages_menu_popover: messages_popover_menu,
-            add_messages: add_messages,
-            clipboard: clipboard,
+            add_messages,
+            clipboard,
         };
         let messages_view = &model.messages_wrapper.view;
         let sender_for_selection = sender.clone();
@@ -575,31 +614,23 @@ impl FactoryComponent for MessagesTabModel {
                 self.mode = if toggle {
                     widgets.cached_controls.set_visible(true);
                     widgets.cached_centered_controls.set_visible(true);
+                    widgets.live_centered_controls.set_visible(false);
                     widgets.live_controls.set_visible(false);
                     widgets.btn_cache_refresh.set_visible(true);
+                    widgets.btn_cache_destroy.set_visible(true);
+                    widgets.pag_total_label.set_text("Total");
                     MessagesMode::Cached { refresh: false }
                 } else {
                     widgets.live_controls.set_visible(true);
                     widgets.btn_cache_refresh.set_visible(false);
+                    widgets.btn_cache_destroy.set_visible(false);
+                    widgets.pag_total_label.set_text("Messages");
                     widgets.cached_controls.set_visible(false);
                     widgets.cached_centered_controls.set_visible(false);
-                    widgets.cache_timestamp.set_visible(false);
-                    widgets.cache_timestamp.set_text("");
-                    let cloned_topic = self.topic.clone().unwrap();
-                    let topic = KrustTopic {
-                        name: cloned_topic.name.clone(),
-                        connection_id: cloned_topic.connection_id,
-                        cached: None,
-                        partitions: vec![],
-                        total: None,
-                        favourite: cloned_topic.favourite.clone(),
-                    };
-                    let conn = self.connection.clone().unwrap();
-                    MessagesWorker::new().cleanup_messages(&MessagesCleanupRequest {
-                        connection: conn,
-                        topic: topic.clone(),
-                    });
-                    self.topic = Some(topic);
+                    widgets.live_centered_controls.set_visible(true);
+                    // widgets.cache_timestamp.set_visible(false);
+                    // widgets.cache_timestamp.set_text("");
+
                     MessagesMode::Live
                 };
             }
@@ -634,13 +665,14 @@ impl FactoryComponent for MessagesTabModel {
                             offset: item.borrow().offset,
                             key: Some(item.borrow().key.clone()),
                             value: item.borrow().value.clone(),
-                            timestamp: item.borrow().timestamp.clone(),
+                            timestamp: item.borrow().timestamp,
                         });
                     }
                 }
                 sender.spawn_oneshot_command(move || {
                     let id = Uuid::new_v4();
-                    TOASTER_BROKER.send(AppMsg::ShowToast(id.to_string(), "Copying...".to_string()));
+                    TOASTER_BROKER
+                        .send(AppMsg::ShowToast(id.to_string(), "Copying...".to_string()));
                     let data = match copy {
                         Copy::AllAsCsv => copy_all_as_csv(&selected_items),
                         Copy::KeyValue => copy_key_value(&selected_items),
@@ -688,7 +720,7 @@ impl FactoryComponent for MessagesTabModel {
                 sender.input(MessagesTabMsg::ToggleMode(toggled));
             }
             MessagesTabMsg::LiveSearchMessages(term) => {
-                match self.mode.clone() {
+                match self.mode {
                     MessagesMode::Live => {
                         self.messages_wrapper.clear_filters();
                         let search_term = term.clone();
@@ -702,15 +734,18 @@ impl FactoryComponent for MessagesTabModel {
                 };
             }
             MessagesTabMsg::SearchMessages => {
-                match self.mode.clone() {
+                info!("[SearchMessages] {}", self.mode);
+                match self.mode {
                     MessagesMode::Live => {
                         info!("[SearchMessages] Live mode, do nothing");
                     }
-                    MessagesMode::Cached { refresh: _ } => sender.input(MessagesTabMsg::GetMessages),
+                    MessagesMode::Cached { refresh: _ } => {
+                        sender.input(MessagesTabMsg::GetMessages)
+                    }
                 };
             }
             MessagesTabMsg::GetMessages => {
-                //sender.output(MessagesTabOutput::ShowBanner("Working...".to_string())).unwrap();
+                info!("[GetMessages] {}", self.mode);
                 STATUS_BROKER.send(StatusBarMsg::Start);
                 on_loading(widgets, false);
                 let mode = self.mode;
@@ -731,7 +766,7 @@ impl FactoryComponent for MessagesTabModel {
                 let fetch = self.fetch_type.clone();
                 let max_messages: i64 = self.max_messages as i64;
                 widgets.pag_current_entry.set_text("0");
-                let task_name = format!("Working on {}", &topic.name.clone());
+                let task_name = topic.name.clone();
                 let task = Task::new(
                     TaskVariant::FetchMessages,
                     Some(task_name),
@@ -745,13 +780,13 @@ impl FactoryComponent for MessagesTabModel {
                     let result = &messages_worker
                         .get_messages(&MessagesRequest {
                             task: Some(task),
-                            mode: mode,
+                            mode,
                             connection: conn,
                             topic: topic.clone(),
                             page_operation: PageOp::Next,
                             page_size,
                             offset_partition: (0, 0),
-                            search: search,
+                            search,
                             fetch,
                             max_messages,
                         })
@@ -793,7 +828,7 @@ impl FactoryComponent for MessagesTabModel {
                     "getting next messages [page_size={}, last_offset={}, last_partition={}]",
                     page_size, offset, partition
                 );
-                let task_name = format!("Working on {}", &topic.name.clone());
+                let task_name = topic.name.clone();
                 let task = Task::new(
                     TaskVariant::FetchMessages,
                     Some(task_name),
@@ -807,13 +842,13 @@ impl FactoryComponent for MessagesTabModel {
                     let result = &messages_worker
                         .get_messages(&MessagesRequest {
                             task: Some(task.clone()),
-                            mode: mode,
+                            mode,
                             connection: conn,
                             topic: topic.clone(),
                             page_operation: PageOp::Next,
                             page_size,
                             offset_partition: (offset, partition),
-                            search: search,
+                            search,
                             fetch,
                             max_messages,
                         })
@@ -851,7 +886,7 @@ impl FactoryComponent for MessagesTabModel {
                 let search = get_search_term(widgets);
                 let fetch = self.fetch_type.clone();
                 let max_messages: i64 = self.max_messages as i64;
-                let task_name = format!("Working on {}", &topic.name.clone());
+                let task_name = topic.name.clone();
                 let task = Task::new(
                     TaskVariant::FetchMessages,
                     Some(task_name),
@@ -865,13 +900,13 @@ impl FactoryComponent for MessagesTabModel {
                     let result = &messages_worker
                         .get_messages(&MessagesRequest {
                             task: Some(task.clone()),
-                            mode: mode,
+                            mode,
                             connection: conn,
                             topic: topic.clone(),
                             page_operation: PageOp::Prev,
                             page_size,
                             offset_partition: (offset, partition),
-                            search: search,
+                            search,
                             fetch,
                             max_messages,
                         })
@@ -882,10 +917,55 @@ impl FactoryComponent for MessagesTabModel {
                     CommandMsg::Data(result.clone())
                 });
             }
-            MessagesTabMsg::RefreshMessages => {
+            MessagesTabMsg::RefreshCache => {
                 info!("refreshing cached messages");
                 self.mode = MessagesMode::Cached { refresh: true };
                 sender.input(MessagesTabMsg::GetMessages);
+            }
+            MessagesTabMsg::DestroyCache => {
+                info!("destroying cached messages");
+                let conn = self.connection.clone().unwrap();
+                let topic = self.topic.clone().unwrap();
+                let result_topic =
+                    MessagesWorker::new().cleanup_messages(&MessagesCleanupRequest {
+                        connection: conn,
+                        topic: topic.clone(),
+                    });
+                info!("destroying cached message::{:?}", result_topic.clone());
+                match result_topic {
+                    Some(_) => self.topic = result_topic,
+                    None => warn!("unable to destroy cache"),
+                };
+                widgets.cache_timestamp.set_text("");
+                widgets.btn_cache_toggle.set_active(false);
+                sender.input(MessagesTabMsg::ToggleMode(false));
+            }
+            MessagesTabMsg::RefreshTotalCounter => {
+                info!("refreshing total counter");
+                let task = Task::new(
+                    TaskVariant::FetchMessages,
+                    Some("refresh_total_counter".to_string()),
+                    None,
+                );
+                TOASTER_BROKER.send(AppMsg::ShowToast(
+                    task.id.clone(),
+                    "Counting messages...".to_string(),
+                ));
+                let conn = self.connection.clone().unwrap();
+                let topic = self.topic.clone().unwrap();
+                sender.oneshot_command(async move {
+                    // Run async background task
+                    let messages_worker = MessagesWorker::new();
+                    let total = messages_worker
+                        .count_messages(&MessagesTotalCounterRequest {
+                            connection: conn,
+                            topic: topic.clone(),
+                        })
+                        .await
+                        .unwrap_or_default();
+                    trace!("selected topic {} with {} messages", topic.name, &total,);
+                    CommandMsg::RefreshTotalCounterResult(task.id, total)
+                });
             }
             MessagesTabMsg::StopGetMessages => {
                 info!("cancelling get messages...");
@@ -957,9 +1037,6 @@ impl FactoryComponent for MessagesTabModel {
                 STATUS_BROKER.send(StatusBarMsg::StopWithInfo {
                     text: Some(format!("{} messages loaded!", self.messages_wrapper.len())),
                 });
-                if let Some(task) = response.task.clone() {
-                    TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task, 0.2));
-                }
             }
             MessagesTabMsg::OpenMessage(message_idx) => {
                 let item = self.messages_wrapper.get_visible(message_idx).unwrap();
@@ -975,7 +1052,7 @@ impl FactoryComponent for MessagesTabModel {
 
     fn update_cmd_with_view(
         &mut self,
-        _widgets: &mut Self::Widgets,
+        widgets: &mut Self::Widgets,
         message: Self::CommandOutput,
         sender: FactorySender<Self>,
     ) {
@@ -989,12 +1066,18 @@ impl FactoryComponent for MessagesTabModel {
                 });
                 TOASTER_BROKER.send(AppMsg::HideToast(id));
             }
+            CommandMsg::RefreshTotalCounterResult(id, total) => {
+                widgets
+                    .total_counter_entry
+                    .set_text(total.to_string().as_str());
+                TOASTER_BROKER.send(AppMsg::HideToast(id));
+            }
         }
     }
 }
 
 fn get_search_term(widgets: &mut MessagesTabModelWidgets) -> Option<String> {
-    let search: Option<String> = widgets.messages_search_entry.text().try_into().ok();
+    let search: Option<String> = Some(widgets.messages_search_entry.text().into());
     let search = search.clone().unwrap_or_default();
     let search_txt = search.trim();
     if search_txt.is_empty() {
@@ -1007,6 +1090,7 @@ fn get_search_term(widgets: &mut MessagesTabModelWidgets) -> Option<String> {
 fn on_loading(widgets: &mut MessagesTabModelWidgets, enabled: bool) {
     widgets.btn_get_messages.set_sensitive(enabled);
     widgets.btn_cache_refresh.set_sensitive(enabled);
+    widgets.btn_cache_destroy.set_sensitive(enabled);
     widgets.btn_cache_toggle.set_sensitive(enabled);
     widgets.max_messages.set_sensitive(enabled);
 }
@@ -1035,27 +1119,25 @@ fn fill_pagination(
         .set_text(current_page.to_string().as_str());
     let pages = ((total as f64) / (page_size as f64)).ceil() as usize;
     widgets.pag_last_entry.set_text(pages.to_string().as_str());
-    match (first, last) {
-        (Some(first), Some(last)) => {
-            let first_offset = first.offset;
-            let first_partition = first.partition;
-            let last_offset = last.offset;
-            let last_partition = last.partition;
-            widgets
-                .first_offset
-                .set_text(first_offset.to_string().as_str());
-            widgets
-                .first_partition
-                .set_text(first_partition.to_string().as_str());
-            widgets
-                .last_offset
-                .set_text(last_offset.to_string().as_str());
-            widgets
-                .last_partition
-                .set_text(last_partition.to_string().as_str());
-        }
-        (_, _) => (),
+    if let (Some(first), Some(last)) = (first, last) {
+        let first_offset = first.offset;
+        let first_partition = first.partition;
+        let last_offset = last.offset;
+        let last_partition = last.partition;
+        widgets
+            .first_offset
+            .set_text(first_offset.to_string().as_str());
+        widgets
+            .first_partition
+            .set_text(first_partition.to_string().as_str());
+        widgets
+            .last_offset
+            .set_text(last_offset.to_string().as_str());
+        widgets
+            .last_partition
+            .set_text(last_partition.to_string().as_str());
     }
+
     info!(
         "fill pagination of current page {} of {}",
         current_page, pages
@@ -1088,7 +1170,7 @@ fn copy_all_as_csv(
         .delimiter(b';')
         .quote_style(csv::QuoteStyle::NonNumeric)
         .from_writer(vec![]);
-    let _ = wtr.write_record(&["PARTITION", "OFFSET", "KEY", "VALUE", "TIMESTAMP"]);
+    let _ = wtr.write_record(["PARTITION", "OFFSET", "KEY", "VALUE", "TIMESTAMP"]);
     for item in selected_items {
         let partition = item.partition;
         let offset = item.offset;
@@ -1114,8 +1196,7 @@ fn copy_all_as_csv(
         ]);
         let _ = wtr.write_record(&record);
     }
-    let data = String::from_utf8(wtr.into_inner().unwrap_or_default());
-    data
+    String::from_utf8(wtr.into_inner().unwrap_or_default())
 }
 fn copy_key_value(
     selected_items: &Vec<KrustMessage>,
@@ -1129,7 +1210,7 @@ fn copy_key_value(
             Err(_) => value.replace('\n', ""),
         };
         let copy_text = format!("{},{}\n", key.unwrap_or_default(), clean_value);
-        copy_content.push_str(&copy_text.as_str());
+        copy_content.push_str(copy_text.as_str());
     }
     Ok(copy_content)
 }
@@ -1142,7 +1223,7 @@ fn copy_value(selected_items: &Vec<KrustMessage>) -> Result<String, std::string:
             Err(_) => value.replace('\n', ""),
         };
         let copy_text = format!("{}\n", clean_value);
-        copy_content.push_str(&copy_text.as_str());
+        copy_content.push_str(copy_text.as_str());
     }
     Ok(copy_content)
 }
@@ -1151,7 +1232,7 @@ fn copy_key(selected_items: &Vec<KrustMessage>) -> Result<String, std::string::F
     for item in selected_items {
         let key = item.key.clone();
         let copy_text = format!("{}\n", key.unwrap_or_default());
-        copy_content.push_str(&copy_text.as_str());
+        copy_content.push_str(copy_text.as_str());
     }
     Ok(copy_content)
 }

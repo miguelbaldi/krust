@@ -86,9 +86,7 @@ impl Component for MessageViewerModel {
         headers_wrapper.append_column::<HeaderNameColumn>();
         headers_wrapper.append_column::<HeaderValueColumn>();
         let headers_view = headers_wrapper.view.clone();
-        let model = MessageViewerModel {
-            headers_wrapper: headers_wrapper,
-        };
+        let model = MessageViewerModel { headers_wrapper };
         let widgets = view_output!();
 
         let buffer = widgets
@@ -101,10 +99,7 @@ impl Component for MessageViewerModel {
             buffer.set_style_scheme(Some(scheme));
         }
 
-        ComponentParts {
-            model: model,
-            widgets: widgets,
-        }
+        ComponentParts { model, widgets }
     }
 
     fn update_with_view(

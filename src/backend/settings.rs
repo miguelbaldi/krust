@@ -3,7 +3,11 @@ use std::fs::File;
 use std::path::PathBuf;
 use tracing::*;
 
-use crate::{component::settings_dialog::MessagesSortOrder, config::{ensure_app_config_dir, ExternalError}, DATE_TIME_FORMAT, DATE_TIME_WITH_MILLIS_FORMAT};
+use crate::{
+    component::settings_dialog::MessagesSortOrder,
+    config::{ensure_app_config_dir, ExternalError},
+    DATE_TIME_FORMAT, DATE_TIME_WITH_MILLIS_FORMAT,
+};
 
 /// Application global settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,6 +18,8 @@ pub struct Settings {
     pub is_full_timestamp: bool,
     pub messages_sort_column: String,
     pub messages_sort_column_order: String,
+    pub threads_number: u8,
+    pub default_connection_timeout: usize,
 }
 
 impl Settings {
@@ -23,9 +29,7 @@ impl Settings {
         serde_json::from_reader(File::open(path).map_err(|e| {
             ExternalError::ConfigurationError(format!("unable to open file: {:?}", e))
         })?)
-        .map_err(|e| {
-            ExternalError::ConfigurationError(format!("unable to read state: {:?}", e))
-        })
+        .map_err(|e| ExternalError::ConfigurationError(format!("unable to read state: {:?}", e)))
     }
 
     /// Persist to disk.
@@ -38,14 +42,16 @@ impl Settings {
         );
 
         let file = File::create(path).map_err(|op| {
-            ExternalError::ConfigurationError(
-                format!("unable to create intermediate directories: {:?}", op),
-            )
+            ExternalError::ConfigurationError(format!(
+                "unable to create intermediate directories: {:?}",
+                op
+            ))
         })?;
         serde_json::to_writer(file, self).map_err(|op| {
-            ExternalError::ConfigurationError(
-                format!("unable to create to write state to disk: {:?}", op),
-            )
+            ExternalError::ConfigurationError(format!(
+                "unable to create to write state to disk: {:?}",
+                op
+            ))
         })
     }
     pub fn timestamp_formatter(&self) -> String {
@@ -53,7 +59,8 @@ impl Settings {
             DATE_TIME_WITH_MILLIS_FORMAT
         } else {
             DATE_TIME_FORMAT
-        }.to_string()
+        }
+        .to_string()
     }
 }
 
@@ -68,6 +75,8 @@ impl Default for Settings {
             is_full_timestamp: false,
             messages_sort_column: "Offset".to_string(),
             messages_sort_column_order: MessagesSortOrder::Default.to_string(),
+            threads_number: 4,
+            default_connection_timeout: 5,
         }
     }
 }

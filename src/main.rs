@@ -5,8 +5,11 @@ use gtk::gdk;
 use gtk::gio;
 use gtk::gio::ApplicationFlags;
 use gtk::prelude::ApplicationExt;
+use krust::Settings;
 use krust::APP_RESOURCE_PATH;
 use krust::TOASTER_BROKER;
+use relm4::RELM_BLOCKING_THREADS;
+use relm4::RELM_THREADS;
 use tracing::*;
 use tracing_subscriber::filter;
 use tracing_subscriber::prelude::*;
@@ -32,6 +35,9 @@ fn initialize_resources() {
 }
 
 fn main() -> Result<(), ()> {
+    let threads_number = Settings::read().unwrap_or_default().threads_number as usize;
+    RELM_THREADS.set(threads_number).unwrap();
+    RELM_BLOCKING_THREADS.set(threads_number).unwrap();
     let filter = filter::Targets::new()
         // Enable the `INFO` level for anything in `my_crate`
         .with_target("relm4", Level::WARN)
@@ -43,6 +49,7 @@ fn main() -> Result<(), ()> {
         .with(filter)
         .init();
 
+    info!("RELM_THREADS[{}]", threads_number);
     let gsk_renderer_var = "GSK_RENDERER";
     let render = match env::var(gsk_renderer_var) {
         Ok(render) => {
@@ -55,7 +62,11 @@ fn main() -> Result<(), ()> {
             render.to_string()
         }
     };
-    info!("GSK_RENDERER[after]:: intended={}, actual={:?}", render, env::var(gsk_renderer_var));
+    info!(
+        "GSK_RENDERER[after]:: intended={}, actual={:?}",
+        render,
+        env::var(gsk_renderer_var)
+    );
     // Call `gtk::init` manually because we instantiate GTK types in the app model.
     gtk::init().expect("should initialize GTK");
 

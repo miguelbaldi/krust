@@ -50,19 +50,19 @@ impl Component for MessagesPageModel {
     view! {
         #[root]
         adw::TabOverview {
-            set_view: Some(&topics_viewer),
+            set_view: Some(topics_viewer),
             #[wrap(Some)]
             set_child = &gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
                 append: topics_tabs = &adw::TabBar {
                     set_autohide: false,
                     set_expand_tabs: true,
-                    set_view: Some(&topics_viewer),
+                    set_view: Some(topics_viewer),
                     #[wrap(Some)]
                     set_end_action_widget = &gtk::Box {
                         set_orientation: gtk::Orientation::Horizontal,
                         adw::TabButton {
-                            set_view: Some(&topics_viewer),
+                            set_view: Some(topics_viewer),
                             set_action_name: Some("overview.open"),
                         },
                     },
@@ -114,7 +114,7 @@ impl Component for MessagesPageModel {
         let model = MessagesPageModel {
             topic: None,
             connection: None,
-            topics: topics,
+            topics,
         };
 
         ComponentParts { model, widgets }
@@ -133,7 +133,7 @@ impl Component for MessagesPageModel {
                 for i in 0..widgets.topics_viewer.n_pages() {
                     let tab = widgets.topics_viewer.nth_page(i);
                     let title = format!("[{}] {}", connection.name, topic.name);
-                    if title == tab.title().to_string() {
+                    if title == tab.title() {
                         has_page = Some((i as usize, tab.clone()));
                         break;
                     }
@@ -203,16 +203,13 @@ impl Component for MessagesPageModel {
                         }
                     }
                     if let Some(idx) = idx {
-                        let result = topics.remove(idx.try_into().unwrap());
+                        let result = topics.remove(idx);
                         let name = if let Some(res) = result {
                             res.topic.unwrap().name
                         } else {
                             String::new()
                         };
-                        info!(
-                            "page model with index {} and name {} removed",
-                            idx, name
-                        );
+                        info!("page model with index {} and name {} removed", idx, name);
                     } else {
                         info!("page model not found for removal");
                     }

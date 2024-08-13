@@ -5,7 +5,12 @@ use std::{collections::HashMap, time::Duration};
 use adw::{prelude::*, Toast};
 use gtk::glib;
 use relm4::{
-    abstractions::Toaster, actions::{RelmAction, RelmActionGroup}, factory::FactoryVecDeque, main_adw_application, main_application, prelude::*, MessageBroker
+    abstractions::Toaster,
+    actions::{RelmAction, RelmActionGroup},
+    factory::FactoryVecDeque,
+    main_adw_application, main_application,
+    prelude::*,
+    MessageBroker,
 };
 use relm4_components::alert::{Alert, AlertMsg, AlertResponse, AlertSettings};
 use tracing::*;
@@ -318,7 +323,7 @@ impl Component for AppModel {
             Err(e) => error!("error loading connections: {:?}", e),
         }
         let model = AppModel {
-            toaster: toaster,
+            toaster,
             toasts: HashMap::new(),
             _status_bar: status_bar,
             _task_manager: task_manager,
@@ -347,28 +352,28 @@ impl Component for AppModel {
         let main_window = main_application().active_window().unwrap();
         let surface = main_window.surface();
         if let Some(surface) = surface {
-            let toplevel =  surface.downcast::<gtk::gdk::Toplevel>();
+            let toplevel = surface.downcast::<gtk::gdk::Toplevel>();
             if let Ok(toplevel) = toplevel {
                 info!("TOPLEVEL::{:?}", toplevel);
-                toplevel.connect_layout(|_surface, width, height|{
-                    trace!("TOPLEVEL::LAYOUT::[width={},height={}]", width, height);
+                toplevel.connect_layout(|_surface, _width, _height| {
+                    //trace!("TOPLEVEL::LAYOUT::[width={},height={}]", width, height);
                 });
                 toplevel.connect_enter_monitor(|_surface, monitor| {
-                    trace!("TOPLEVEL::ENTER_MONITOR::[monitor={:?}]", monitor);
-                    if let Some(description) = monitor.description() {
-                        trace!("TOPLEVEL::ENTER_MONITOR::[description={}]", description.to_string());
+                    //trace!("TOPLEVEL::ENTER_MONITOR::[monitor={:?}]", monitor);
+                    if let Some(_description) = monitor.description() {
+                        //trace!("TOPLEVEL::ENTER_MONITOR::[description={}]", description.to_string());
                     }
-                    if let Some(connector) = monitor.connector() {
-                        trace!("TOPLEVEL::ENTER_MONITOR::[connector={}]", connector.to_string());
+                    if let Some(_connector) = monitor.connector() {
+                        //trace!("TOPLEVEL::ENTER_MONITOR::[connector={}]", connector.to_string());
                     }
                 });
                 toplevel.connect_leave_monitor(|_surface, monitor| {
-                    trace!("TOPLEVEL::LEAVE_MONITOR::[monitor={:?}]", monitor);
-                    if let Some(description) = monitor.description() {
-                        trace!("TOPLEVEL::LEAVE_MONITOR::[description={}]", description.to_string());
+                    //trace!("TOPLEVEL::LEAVE_MONITOR::[monitor={:?}]", monitor);
+                    if let Some(_description) = monitor.description() {
+                        //trace!("TOPLEVEL::LEAVE_MONITOR::[description={}]", description.to_string());
                     }
-                    if let Some(connector) = monitor.connector() {
-                        trace!("TOPLEVEL::LEAVE_MONITOR::[connector={}]", connector.to_string());
+                    if let Some(_connector) = monitor.connector() {
+                        // trace!("TOPLEVEL::LEAVE_MONITOR::[connector={}]", connector.to_string());
                     }
                 });
                 // toplevel.connect_compute_size(|tl, cs| {
@@ -390,20 +395,18 @@ impl Component for AppModel {
     ) {
         match msg {
             AppMsg::ShowToast(id, text) => {
-                let toast = adw::Toast::builder().title(&text).timeout(0).build();
+                let toast = adw::Toast::builder().title(text).timeout(0).build();
                 self.toasts.insert(id, toast.clone());
                 self.toaster.add_toast(toast);
             }
             AppMsg::HideToast(id) => {
                 info!("hide_toast::{}", &id);
                 let command_sender = sender.command_sender().clone();
-                gtk::glib::timeout_add_once(Duration::from_secs(2), move || {
+                gtk::glib::timeout_add_once(Duration::from_secs(1), move || {
                     command_sender.emit(AppCommand::LateHide(id));
                 });
             }
-            AppMsg::CloseIgnore => {
-                ();
-            }
+            AppMsg::CloseIgnore => (),
             AppMsg::CloseRequest => {
                 self.close_dialog.emit(AlertMsg::Show);
             }
@@ -441,6 +444,7 @@ impl Component for AppModel {
                                 conn_to_update.sasl_username = new_conn.sasl_username;
                                 conn_to_update.sasl_password = new_conn.sasl_password;
                                 conn_to_update.color = new_conn.color;
+                                conn_to_update.timeout = new_conn.timeout;
                             }
                             None => warn!("no connection to update"),
                         };
@@ -542,7 +546,7 @@ impl Component for AppModel {
                     toast.dismiss();
                 }
             }
-         }
+        }
     }
 
     fn shutdown(&mut self, widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {

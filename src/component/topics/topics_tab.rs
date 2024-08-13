@@ -47,7 +47,18 @@ impl Eq for TopicListItem {}
 
 impl Ord for TopicListItem {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap()
+        //self.partial_cmp(other).unwrap()
+        match PartialOrd::partial_cmp(&self.favourite, &other.favourite) {
+            Some(Ordering::Equal) => match PartialOrd::partial_cmp(&self.name, &other.name) {
+                Some(Ordering::Equal) => {
+                    PartialOrd::partial_cmp(&self.partition_count, &other.partition_count).unwrap()
+                }
+                cmp => cmp.unwrap(),
+            },
+            Some(Ordering::Less) => Ordering::Greater,
+            Some(Ordering::Greater) => Ordering::Less,
+            cmp => cmp.unwrap(),
+        }
     }
 }
 
@@ -61,17 +72,7 @@ impl PartialEq for TopicListItem {
 
 impl PartialOrd for TopicListItem {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match PartialOrd::partial_cmp(&self.favourite, &other.favourite) {
-            Some(Ordering::Equal) => match PartialOrd::partial_cmp(&self.name, &other.name) {
-                Some(Ordering::Equal) => {
-                    PartialOrd::partial_cmp(&self.partition_count, &other.partition_count)
-                }
-                cmp => cmp,
-            },
-            Some(Ordering::Less) => Some(Ordering::Greater),
-            Some(Ordering::Greater) => Some(Ordering::Less),
-            cmp => cmp,
-        }
+        Some(self.cmp(other))
     }
 }
 
@@ -195,11 +196,10 @@ impl TopicsTabModel {
             let mut repo = Repository::new();
             let topics = repo.find_topics_by_connection(conn.id.unwrap())?;
             debug!("fetch_persited_topics::{:?}", topics);
-            let topics_map = topics
+            topics
                 .into_iter()
                 .map(|t| (t.name.clone(), t.clone()))
-                .collect::<HashMap<_, _>>();
-            topics_map
+                .collect::<HashMap<_, _>>()
         } else {
             HashMap::new()
         };
@@ -351,7 +351,9 @@ impl FactoryComponent for TopicsTabModel {
                         });
                     }
                     Err(err) => {
-                        sender.output_sender().emit(TopicsTabOutput::HandleError(conn.clone(), true));
+                        sender
+                            .output_sender()
+                            .emit(TopicsTabOutput::HandleError(conn.clone(), true));
                         sender.command_sender().emit(CommandMsg::ShowError(err));
                     }
                 };

@@ -35,7 +35,7 @@ struct SidebarListItem {
 impl SidebarListItem {
     fn new(variant: TaskVariant) -> Self {
         Self {
-            variant: variant,
+            variant,
             label: StringBinding::default(),
             spin: BoolBinding::new(true),
             counter: Arc::new(Mutex::new(1)),
@@ -50,7 +50,7 @@ struct Widgets {
 
 impl Drop for Widgets {
     fn drop(&mut self) {
-        dbg!(self.name.label());
+        debug!("Drop[Widgets]: {}", self.name.label());
     }
 }
 
@@ -61,16 +61,14 @@ impl SidebarListItem {
                 if counter > 1 {
                     format!("Fetching {} topics", &counter)
                 } else {
-                    format!("Fetching topic")
+                    String::from("Fetching topic")
                 }
             }
         }
     }
     fn label_done(variant: &TaskVariant) -> String {
         match variant {
-            TaskVariant::FetchMessages => {
-                format!("Fetching done!")
-            }
+            TaskVariant::FetchMessages => String::from("Fetching done!"),
         }
     }
 }
@@ -120,7 +118,7 @@ impl TaskListItem {
         Self {
             value,
             progress: F64Binding::new(0.0),
-            sender: sender,
+            sender,
             cancel_handler_id: RefCell::new(None),
         }
     }
@@ -135,11 +133,13 @@ struct TaskWidgets {
 
 impl Drop for TaskWidgets {
     fn drop(&mut self) {
-        dbg!(self
-            .progress_bar
-            .text()
-            .map(|t| t.to_string())
-            .unwrap_or_default());
+        debug!(
+            "Drop[TaskWidgets]: {}",
+            self.progress_bar
+                .text()
+                .map(|t| t.to_string())
+                .unwrap_or_default()
+        );
     }
 }
 
@@ -243,14 +243,13 @@ pub struct TaskManagerModel {
 pub enum TaskVariant {
     FetchMessages,
 }
-
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct Task {
     pub id: String,
     pub variant: TaskVariant,
     pub name: Option<String>,
     pub token: Option<CancellationToken>,
-    _private: (),
 }
 
 impl Task {
@@ -261,11 +260,10 @@ impl Task {
     ) -> Self {
         let id = Uuid::new_v4().to_string();
         Self {
-            id: id,
-            variant: variant,
-            name: name,
-            token: token,
-            _private: (),
+            id,
+            variant,
+            name,
+            token,
         }
     }
 }
@@ -354,6 +352,7 @@ impl Component for TaskManagerModel {
     ) {
         match input {
             TaskManagerMsg::AddTask(task) => {
+                info!("task_manager::add_task: id={}", task.id);
                 widgets.tasks_button.set_sensitive(true);
                 let maybe_index = self
                     .sidebar_list_wrapper
@@ -392,10 +391,11 @@ impl Component for TaskManagerModel {
                     let item = &mut found.borrow_mut();
                     let progress = &mut item.progress;
                     let mut guard = progress.guard();
-                    *guard += step;
-                    info!(
+                    *guard = step;
+                    trace!(
                         "task_manager::progress::received::{}={}",
-                        item.value.id, *guard
+                        item.value.id,
+                        *guard
                     );
                     if *guard >= 1.0 {
                         sender.input(TaskManagerMsg::RemoveTask(task.clone()));
@@ -422,7 +422,7 @@ impl Component for TaskManagerModel {
                 }
                 sender.oneshot_command(async move {
                     sleep(Duration::from_secs(5)).await;
-                    info!("removing task with index: {}", task.id);
+                    trace!("removing task with index: {}", task.id);
                     TaskManagerCommand::RemoveTask(task.clone())
                 });
             }

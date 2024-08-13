@@ -37,6 +37,7 @@ pub struct ConnectionListModel {
     pub sasl_username: Option<String>,
     pub sasl_password: Option<String>,
     pub color: Option<String>,
+    pub timeout: Option<usize>,
     pub is_connected: bool,
 }
 
@@ -51,6 +52,7 @@ impl From<&mut ConnectionListModel> for KrustConnection {
             sasl_username: value.sasl_username.clone(),
             sasl_password: value.sasl_password.clone(),
             color: value.color.clone(),
+            timeout: value.timeout,
         }
     }
 }
@@ -116,6 +118,7 @@ impl FactoryComponent for ConnectionListModel {
             sasl_username: conn.sasl_username,
             sasl_password: conn.sasl_password,
             color: conn.color,
+            timeout: conn.timeout,
             is_connected: false,
         }
     }

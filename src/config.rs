@@ -24,6 +24,8 @@ pub enum ExternalError {
     HeadersError(#[from] SpannedError),
     #[error("configuration error: `{0}`")]
     ConfigurationError(String),
+    #[error("error caching messages for topic {0}, duration: {1}")]
+    CachingError(String, String),
 }
 
 /// Application state that is not intended to be directly configurable by the user. The state is
@@ -55,9 +57,7 @@ impl State {
         serde_json::from_reader(File::open(path).map_err(|e| {
             ExternalError::ConfigurationError(format!("unable to read state: {:?}", e))
         })?)
-        .map_err(|e| {
-            ExternalError::ConfigurationError(format!("unable to read state: {:?}", e))
-        })
+        .map_err(|e| ExternalError::ConfigurationError(format!("unable to read state: {:?}", e)))
     }
 
     /// Persist to disk.
@@ -66,18 +66,21 @@ impl State {
 
         trace!(
             "persisting application state: {:?}, into path: {:?}",
-            self, path
+            self,
+            path
         );
 
         let file = File::create(path).map_err(|op| {
-            ExternalError::ConfigurationError(
-                format!("unable to create intermediate directories: {:?}", op),
-            )
+            ExternalError::ConfigurationError(format!(
+                "unable to create intermediate directories: {:?}",
+                op
+            ))
         })?;
         serde_json::to_writer(file, self).map_err(|op| {
-            ExternalError::ConfigurationError(
-                format!("unable to create to write state to disk: {:?}", op),
-            )
+            ExternalError::ConfigurationError(format!(
+                "unable to create to write state to disk: {:?}",
+                op
+            ))
         })
     }
 }
@@ -95,9 +98,12 @@ impl Default for State {
 }
 
 pub fn database_connection() -> Result<Connection, ExternalError> {
-    database_connection_with_name(&ensure_app_config_dir()?,&"application".to_string())
+    database_connection_with_name(&ensure_app_config_dir()?, &"application".to_string())
 }
-pub fn database_connection_with_name(path: &PathBuf, database_name: &String) -> Result<Connection, ExternalError> {
+pub fn database_connection_with_name(
+    path: &PathBuf,
+    database_name: &String,
+) -> Result<Connection, ExternalError> {
     let data_file = ensure_path_dir(path)?.join(format!("{}.db", database_name));
     Connection::open_with_flags(
         data_file,
@@ -107,17 +113,19 @@ pub fn database_connection_with_name(path: &PathBuf, database_name: &String) -> 
     )
     .map_err(ExternalError::DatabaseError)
 }
-pub fn destroy_database_with_name(path: PathBuf, database_name: &String) -> Result<(), ExternalError> {
+pub fn destroy_database_with_name(
+    path: PathBuf,
+    database_name: &String,
+) -> Result<(), ExternalError> {
     let data_file = path.join(format!("{}.db", database_name));
-    fs::remove_file(data_file)
-        .map_err(ExternalError::FileSystemError)
-
+    fs::remove_file(data_file).map_err(ExternalError::FileSystemError)
 }
 
 pub fn app_config_dir() -> Result<PathBuf, ExternalError> {
-    let dirs = ProjectDirs::from(KRUST_QUALIFIER, KRUST_ORGANIZATION, KRUST_APPLICATION).ok_or_else(|| {
-        ExternalError::ConfigurationError("unable to find user home directory".into())
-    })?;
+    let dirs = ProjectDirs::from(KRUST_QUALIFIER, KRUST_ORGANIZATION, KRUST_APPLICATION)
+        .ok_or_else(|| {
+            ExternalError::ConfigurationError("unable to find user home directory".into())
+        })?;
     Ok(dirs.data_local_dir().to_path_buf())
 }
 
@@ -128,9 +136,10 @@ fn state_path() -> Result<PathBuf, ExternalError> {
 pub fn ensure_path_dir(path: &PathBuf) -> Result<PathBuf, ExternalError> {
     trace!("ensuring path: {:?}", path);
     fs::create_dir_all(path).map_err(|op| {
-        ExternalError::ConfigurationError(
-            format!("unable to create intermediate directories: {:?}", op),
-        )
+        ExternalError::ConfigurationError(format!(
+            "unable to create intermediate directories: {:?}",
+            op
+        ))
     })?;
     Ok(path.clone())
 }

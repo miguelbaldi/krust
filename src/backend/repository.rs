@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use strum::EnumString;
 use tracing::warn;
 
+use crate::component::task_manager::{Task, TaskManagerMsg, TASK_MANAGER_BROKER};
 use crate::config::{
     database_connection, database_connection_with_name, destroy_database_with_name, ExternalError,
 };
@@ -37,6 +38,7 @@ pub struct KrustConnection {
     pub sasl_username: Option<String>,
     pub sasl_password: Option<String>,
     pub color: Option<String>,
+    pub timeout: Option<usize>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq)]
 pub struct Partition {
@@ -80,6 +82,7 @@ pub struct KrustHeader {
 pub struct Repository {
     conn: rusqlite::Connection,
 }
+#[derive(Clone)]
 pub struct MessagesRepository {
     topic_name: String,
     path: PathBuf,
@@ -97,7 +100,7 @@ impl MessagesRepository {
         }
     }
 
-    pub fn get_connection(&mut self) -> Connection {
+    pub fn get_connection(&self) -> Connection {
         let conn = database_connection_with_name(&self.path, &self.database_name)
             .expect("problem acquiring database connection");
         conn.execute_batch(
@@ -111,9 +114,8 @@ impl MessagesRepository {
         conn
     }
     pub fn get_init_connection(&mut self) -> Connection {
-        let conn = database_connection_with_name(&self.path, &self.database_name)
-            .expect("problem acquiring database connection");
-        conn
+        database_connection_with_name(&self.path, &self.database_name)
+            .expect("problem acquiring database connection")
     }
     pub fn init(&mut self) -> Result<(), ExternalError> {
         let result = self.get_init_connection().execute_batch(
@@ -131,7 +133,7 @@ impl MessagesRepository {
     }
 
     pub fn save_message(
-        &mut self,
+        &self,
         conn: &Connection,
         message: &KrustMessage,
     ) -> Result<KrustMessage, ExternalError> {
@@ -209,6 +211,7 @@ impl MessagesRepository {
 
     pub fn find_messages(
         &mut self,
+        task: Task,
         page_size: u16,
         search: Option<String>,
     ) -> Result<Vec<KrustMessage>, ExternalError> {
@@ -260,12 +263,15 @@ impl MessagesRepository {
         let mut messages = Vec::new();
         for row in rows {
             messages.push(row?);
+            let progress_step = ((messages.len() as f64) * 1.0) / ((page_size as f64) * 1.0);
+            TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), progress_step));
         }
         Ok(messages)
     }
 
     pub fn find_next_messages(
         &mut self,
+        task: Task,
         page_size: u16,
         last: (usize, usize),
         search: Option<String>,
@@ -321,11 +327,14 @@ impl MessagesRepository {
         let mut messages = Vec::new();
         for row in rows {
             messages.push(row?);
+            let progress_step = ((messages.len() as f64) * 1.0) / ((page_size as f64) * 1.0);
+            TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), progress_step));
         }
         Ok(messages)
     }
     pub fn find_prev_messages(
         &mut self,
+        task: Task,
         page_size: u16,
         first: (usize, usize),
         search: Option<String>,
@@ -385,6 +394,8 @@ impl MessagesRepository {
         let mut messages = Vec::new();
         for row in rows {
             messages.push(row?);
+            let progress_step = ((messages.len() as f64) * 1.0) / ((page_size as f64) * 1.0);
+            TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), progress_step));
         }
         Ok(messages)
     }
@@ -403,35 +414,36 @@ impl Repository {
     }
 
     pub fn init(&mut self) -> Result<(), ExternalError> {
-        let _result = self.conn.execute_batch("
+        self.conn.execute_batch("
         CREATE TABLE IF NOT EXISTS kr_connection(id INTEGER PRIMARY KEY, name TEXT UNIQUE, brokersList TEXT, securityType TEXT, saslMechanism TEXT, saslUsername TEXT, saslPassword TEXT);
         CREATE TABLE IF NOT EXISTS kr_topic(connection_id INTEGER, name TEXT, cached INTEGER, PRIMARY KEY (connection_id, name), FOREIGN KEY (connection_id) REFERENCES kr_connection(id));
         ").map_err(ExternalError::DatabaseError)?;
-        let _result_add_topic_fav = self
-            .conn
-            .execute_batch(
-                "
-        ALTER TABLE kr_topic ADD COLUMN favourite INTEGER DEFAULT 0;
-        ",
-            )
-            .map_err(ExternalError::DatabaseError).unwrap_or_else(|e| {
+        self.conn
+            .execute_batch("ALTER TABLE kr_topic ADD COLUMN favourite INTEGER DEFAULT 0;")
+            .map_err(ExternalError::DatabaseError)
+            .unwrap_or_else(|e| {
                 warn!("kr_topic.favourite: {:?}", e);
             });
-        let _result_add_connection_color = self
-            .conn
-            .execute_batch(
-                "
-        ALTER TABLE kr_connection ADD COLUMN color TEXT DEFAULT NULL;
-        ",
-            )
-            .map_err(ExternalError::DatabaseError).unwrap_or_else(|e| {
-                warn!("kr_topic.favourite: {:?}", e);
+        self.conn
+            .execute_batch("ALTER TABLE kr_connection ADD COLUMN color TEXT DEFAULT NULL;")
+            .map_err(ExternalError::DatabaseError)
+            .unwrap_or_else(|e| {
+                warn!("kr_topic.color: {:?}", e);
+            });
+        self.conn
+            .execute_batch("ALTER TABLE kr_connection ADD COLUMN timeout INTEGER DEFAULT NULL;")
+            .map_err(ExternalError::DatabaseError)
+            .unwrap_or_else(|e| {
+                warn!("kr_topic.timeout: {:?}", e);
             });
         Ok(())
     }
 
     pub fn connection_by_id(&mut self, id: usize) -> Option<KrustConnection> {
-        let mut stmt = self.conn.prepare_cached("SELECT id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword, color FROM kr_connection WHERE id = ?").expect("Should return prepared statement");
+        let mut stmt = self.conn.prepare_cached("
+            SELECT id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword, color, timeout
+            FROM kr_connection WHERE id = ?")
+        .expect("Should return prepared statement");
         let rows = stmt
             .query_row(params![id], |row| {
                 Ok(KrustConnection {
@@ -446,6 +458,7 @@ impl Repository {
                     sasl_username: row.get(5).unwrap_or(None),
                     sasl_password: row.get(6).unwrap_or(None),
                     color: row.get(7).unwrap_or(None),
+                    timeout: row.get(8).unwrap_or(None),
                 })
             })
             .map_err(ExternalError::DatabaseError);
@@ -455,7 +468,21 @@ impl Repository {
         }
     }
     pub fn list_all_connections(&mut self) -> Result<Vec<KrustConnection>, ExternalError> {
-        let mut stmt = self.conn.prepare_cached("SELECT id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword, color FROM kr_connection ORDER BY name")?;
+        let mut stmt = self.conn.prepare_cached(
+            "
+        SELECT
+            id
+            , name
+            , brokersList
+            , securityType
+            , saslMechanism
+            , saslUsername
+            , saslPassword
+            , color
+            , timeout
+        FROM kr_connection
+        ORDER BY name",
+        )?;
         let rows = stmt
             .query_map([], |row| {
                 Ok(KrustConnection {
@@ -470,6 +497,7 @@ impl Repository {
                     sasl_username: row.get(5)?,
                     sasl_password: row.get(6)?,
                     color: row.get(7)?,
+                    timeout: row.get(8)?,
                 })
             })
             .map_err(ExternalError::DatabaseError)?;
@@ -492,8 +520,9 @@ impl Repository {
         let sasl_username = konn.sasl_username.clone();
         let sasl_password = konn.sasl_password.clone();
         let color = konn.color.clone();
-        let mut stmt_by_id = self.conn.prepare_cached("SELECT id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword, color from kr_connection where id = ?1")?;
-        let mut stmt_by_name = self.conn.prepare_cached("SELECT id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword, color from kr_connection where name = ?1")?;
+        let timeout = konn.timeout;
+        let mut stmt_by_id = self.conn.prepare_cached("SELECT id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword, color, timeout from kr_connection where id = ?1")?;
+        let mut stmt_by_name = self.conn.prepare_cached("SELECT id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword, color, timeout from kr_connection where name = ?1")?;
         let row_to_model = move |row: &Row<'_>| {
             Ok(KrustConnection {
                 id: row.get(0)?,
@@ -507,6 +536,7 @@ impl Repository {
                 sasl_username: row.get(5)?,
                 sasl_password: row.get(6)?,
                 color: row.get(7)?,
+                timeout: row.get(8)?,
             })
         };
         let maybe_konn = match id {
@@ -520,14 +550,49 @@ impl Repository {
 
         match maybe_konn {
             Ok(konn_to_update) => {
-                let mut up_stmt = self.conn.prepare_cached("UPDATE kr_connection SET name = :name, brokersList = :brokers, securityType = :security, saslMechanism = :sasl, saslUsername = :sasl_u, saslPassword = :sasl_p, color = :color WHERE id = :id")?;
+                let mut up_stmt = self.conn.prepare_cached(
+                    "
+                    UPDATE kr_connection
+                    SET name = :name
+                    , brokersList = :brokers
+                    , securityType = :security
+                    , saslMechanism = :sasl
+                    , saslUsername = :sasl_u
+                    , saslPassword = :sasl_p
+                    , color = :color
+                    , timeout = :timeout
+                    WHERE id = :id",
+                )?;
                 up_stmt
-                .execute(named_params! { ":id": &konn_to_update.id.unwrap(), ":name": &name, ":brokers": &brokers, ":security": security.to_string(), ":sasl": &sasl, ":sasl_u": &sasl_username, ":sasl_p": &sasl_password, ":color": &color })
-                .map_err(ExternalError::DatabaseError)
-                .map( |_| {KrustConnection { id: konn_to_update.id, name, brokers_list: brokers, security_type: security, sasl_mechanism: sasl, sasl_username, sasl_password, color }})
+                    .execute(named_params! {
+                        ":id": &konn_to_update.id.unwrap(),
+                        ":name": &name,
+                        ":brokers": &brokers,
+                        ":security": security.to_string(),
+                        ":sasl": &sasl,
+                        ":sasl_u": &sasl_username,
+                        ":sasl_p": &sasl_password,
+                        ":color": &color,
+                        ":timeout": &timeout,
+                    })
+                    .map_err(ExternalError::DatabaseError)
+                    .map(|_| KrustConnection {
+                        id: konn_to_update.id,
+                        name,
+                        brokers_list: brokers,
+                        security_type: security,
+                        sasl_mechanism: sasl,
+                        sasl_username,
+                        sasl_password,
+                        color,
+                        timeout,
+                    })
             }
             Err(_) => {
-                let mut ins_stmt = self.conn.prepare_cached("INSERT INTO kr_connection (id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword, color) VALUES (?, ?, ?, ?, ?, ?, ?, ?)  RETURNING id")?;
+                let mut ins_stmt = self.conn.prepare_cached("
+                    INSERT INTO kr_connection (id, name, brokersList, securityType, saslMechanism, saslUsername, saslPassword, color, timeout)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    RETURNING id")?;
                 ins_stmt
                     .query_row(
                         params![
@@ -539,6 +604,7 @@ impl Repository {
                             &konn.sasl_username,
                             &konn.sasl_password,
                             &konn.color,
+                            &konn.timeout,
                         ],
                         |row| {
                             Ok(KrustConnection {
@@ -549,7 +615,8 @@ impl Repository {
                                 sasl_mechanism: sasl,
                                 sasl_username,
                                 sasl_password,
-                                color
+                                color,
+                                timeout,
                             })
                         },
                     )
@@ -609,10 +676,7 @@ impl Repository {
             .map_err(ExternalError::DatabaseError)
     }
 
-    pub fn delete_connection(
-        &mut self,
-        conn_id: usize,
-    ) -> Result<usize, ExternalError> {
+    pub fn delete_connection(&mut self, conn_id: usize) -> Result<usize, ExternalError> {
         let mut stmt_by_id = self.conn.prepare_cached(
             "DELETE FROM kr_connection
             WHERE id = :cid",
@@ -642,23 +706,24 @@ impl Repository {
             )
             .ok()
     }
-    pub fn find_topics_by_connection(&mut self, conn_id: usize) -> Result<Vec<KrustTopic>, ExternalError> {
+    pub fn find_topics_by_connection(
+        &mut self,
+        conn_id: usize,
+    ) -> Result<Vec<KrustTopic>, ExternalError> {
         let mut stmt = self.conn
         .prepare_cached("SELECT connection_id, name, cached, favourite FROM kr_topic WHERE connection_id = :cid")?;
         let rows = stmt
-            .query_and_then(
-                named_params! {":cid": &conn_id },
-                |row| {
-                    Ok::<KrustTopic, rusqlite::Error>(KrustTopic {
-                        connection_id: row.get(0)?,
-                        name: row.get(1)?,
-                        cached: row.get(2)?,
-                        partitions: vec![],
-                        total: None,
-                        favourite: row.get(3)?,
-                    })
-                },
-            ).map_err(ExternalError::DatabaseError)?;
+            .query_and_then(named_params! {":cid": &conn_id }, |row| {
+                Ok::<KrustTopic, rusqlite::Error>(KrustTopic {
+                    connection_id: row.get(0)?,
+                    name: row.get(1)?,
+                    cached: row.get(2)?,
+                    partitions: vec![],
+                    total: None,
+                    favourite: row.get(3)?,
+                })
+            })
+            .map_err(ExternalError::DatabaseError)?;
         let mut topics = vec![];
         for topic in rows {
             topics.push(topic?);

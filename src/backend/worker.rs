@@ -58,6 +58,11 @@ pub struct MessagesCleanupRequest {
     pub topic: KrustTopic,
 }
 
+pub struct MessagesTotalCounterRequest {
+    pub connection: KrustConnection,
+    pub topic: KrustTopic,
+}
+
 pub struct MessagesWorker;
 
 impl MessagesWorker {
@@ -65,28 +70,54 @@ impl MessagesWorker {
         MessagesWorker {}
     }
 
-    pub fn cleanup_messages(self, request: &MessagesCleanupRequest) {
+    pub fn cleanup_messages(self, request: &MessagesCleanupRequest) -> Option<KrustTopic> {
         let mut repo = Repository::new();
         let conn_id = request.connection.id.unwrap();
         let has_topic = repo.find_topic(conn_id, &request.topic.name);
         match has_topic {
-            Some(topic) => {
+            Some(mut topic) => {
                 let mut mrepo = MessagesRepository::new(conn_id, &topic.name);
                 let destroy_result = mrepo.destroy();
+                topic.cached = None;
                 match destroy_result {
                     Ok(_) => {
-                        let destroy_result = repo.delete_topic(conn_id, &topic);
-                        match destroy_result {
-                            Ok(r) => info!("topic removed: {}", r),
-                            Err(e) => warn!("unable to remove topic: {:?}", e),
-                        }
+                        let save_result = repo.save_topic(conn_id, &topic);
+                        match save_result {
+                            Ok(r) => info!("topic updated: {}", r),
+                            Err(e) => warn!("unable to update topic: {:?}", e),
+                        };
+                        Some(topic)
                     }
                     Err(e) => {
                         warn!("unable to destroy cache: {:?}", e);
+                        Some(topic)
                     }
                 }
             }
-            None => info!("nothing to cleanup"),
+            None => {
+                info!("nothing to cleanup");
+                None
+            }
+        }
+    }
+    pub async fn count_messages(self, request: &MessagesTotalCounterRequest) -> Option<usize> {
+        let mut repo = Repository::new();
+        let conn_id = request.connection.id.unwrap();
+        let has_topic = repo.find_topic(conn_id, &request.topic.name);
+        let kafka = KafkaBackend::new(&request.connection);
+        match has_topic {
+            Some(topic) => {
+                let mtopic = kafka
+                    .topic_message_count(&topic.name, Some(KafkaFetch::Oldest), None, None)
+                    .await;
+
+                let total = mtopic.total.unwrap_or_default();
+                Some(total)
+            }
+            None => {
+                info!("nothing to count");
+                None
+            }
         }
     }
     pub async fn get_messages(
@@ -94,7 +125,7 @@ impl MessagesWorker {
         request: &MessagesRequest,
     ) -> Result<MessagesResponse, ExternalError> {
         let task = request.task.clone();
-        let token =  request.task.clone().unwrap().token.unwrap();
+        let token = request.task.clone().unwrap().token.unwrap();
         let req = request.clone();
         let join_handle = tokio::spawn(async move {
             // Wait for either cancellation or a very long time
@@ -117,8 +148,6 @@ impl MessagesWorker {
         self,
         request: &MessagesRequest,
     ) -> Result<MessagesResponse, ExternalError> {
-        let task = request.task.clone().unwrap();
-        TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task, 0.1,));
         match request.mode {
             MessagesMode::Live => self.get_messages_live(request).await,
             MessagesMode::Cached { refresh: _ } => self.get_messages_cached(request).await,
@@ -148,13 +177,12 @@ impl MessagesWorker {
             cached,
             partitions: vec![],
             total: None,
-            favourite: request.topic.favourite.clone(),
+            favourite: request.topic.favourite,
         };
         let topic = repo.save_topic(
             topic.connection_id.expect("should have connection id"),
             &topic,
         )?;
-        TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), 0.1,));
         // Run async background task
         let mut mrepo = MessagesRepository::new(topic.connection_id.unwrap(), &topic.name);
         let total = match request.topic.cached {
@@ -166,11 +194,13 @@ impl MessagesWorker {
                         .await;
                     let partitions = topic.partitions.clone();
                     let total = topic.total.unwrap_or_default();
+                    info!("cache refresh [total={}]", total);
                     kafka
                         .cache_messages_for_topic(
+                            task.clone(),
                             topic_name,
                             total,
-                            &mut mrepo,
+                            &mrepo,
                             Some(partitions),
                             Some(KafkaFetch::Newest),
                         )
@@ -182,51 +212,61 @@ impl MessagesWorker {
                     .unwrap_or_default()
             }
             None => {
-                let total = kafka
-                    .topic_message_count(&topic.name, None, None, None)
-                    .await
-                    .total
-                    .unwrap_or_default();
+                let mtopic = kafka
+                    .topic_message_count(&topic.name, Some(KafkaFetch::Oldest), None, None)
+                    .await;
+
+                let total = mtopic.total.unwrap_or_default();
+
                 mrepo.init().unwrap();
                 kafka
                     .cache_messages_for_topic(
+                        task.clone(),
                         topic_name,
                         total,
-                        &mut mrepo,
-                        None,
+                        &mrepo,
+                        Some(mtopic.partitions),
                         Some(KafkaFetch::Oldest),
                     )
                     .await
                     .unwrap();
-                let total = if request.search.clone().is_some() {
+                if request.search.clone().is_some() {
                     mrepo
                         .count_messages(request.search.clone())
                         .unwrap_or_default()
                 } else {
                     total
-                };
-                total
+                }
             }
         };
-        TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), 0.3,));
         let messages = match request.page_operation {
             PageOp::Next => match request.offset_partition {
                 (0, 0) => mrepo
-                    .find_messages(request.clone().page_size, request.clone().search)
+                    .find_messages(
+                        task.clone(),
+                        request.clone().page_size,
+                        request.clone().search,
+                    )
                     .unwrap(),
                 offset_partition => mrepo
-                    .find_next_messages(request.page_size, offset_partition, request.clone().search)
+                    .find_next_messages(
+                        task.clone(),
+                        request.page_size,
+                        offset_partition,
+                        request.clone().search,
+                    )
                     .unwrap(),
             },
             PageOp::Prev => mrepo
                 .find_prev_messages(
+                    task.clone(),
                     request.page_size,
                     request.offset_partition,
                     request.clone().search,
                 )
                 .unwrap(),
         };
-        TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), 0.4,));
+        TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), 1.0));
         Ok(MessagesResponse {
             task: Some(task),
             total,
@@ -245,20 +285,21 @@ impl MessagesWorker {
         let kafka = KafkaBackend::new(&request.connection);
         let topic = &request.topic.name;
         let task = request.task.clone().unwrap();
-        TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), 0.1,));
+        TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), 0.01));
         // Run async background task
         let messages = kafka
             .list_messages_for_topic(
+                task.clone(),
                 topic,
                 Some(request.fetch.clone()),
                 Some(request.max_messages),
             )
             .await?;
-        TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), 0.7,));
+
         Ok(MessagesResponse {
             task: Some(task),
             total: messages.len(),
-            messages: messages,
+            messages,
             topic: Some(request.topic.clone()),
             page_operation: request.page_operation,
             page_size: request.page_size,

@@ -1,5 +1,7 @@
+use std::cell::RefCell;
+
 use adw::prelude::*;
-use gtk::gdk::DisplayManager;
+use gtk::{gdk::DisplayManager, glib::SignalHandlerId};
 use relm4::*;
 use relm4_components::simple_adw_combo_row::{SimpleComboRow, SimpleComboRowMsg};
 use tracing::*;
@@ -42,6 +44,7 @@ pub struct MessagesSendDialogModel {
     pub multi_format_combo: Controller<SimpleComboRow<MultiFormat>>,
     pub selected_multi_format: Option<MultiFormat>,
     pub is_multiple: bool,
+    pub signal_handlers: Vec<RefCell<Option<SignalHandlerId>>>,
 }
 
 #[derive(Debug)]
@@ -54,12 +57,32 @@ pub enum MessagesSendDialogMsg {
     Cancel,
     Send,
     RecalculateDialogSize,
+    Close,
 }
 
 #[derive(Debug)]
 pub enum AsyncCommandOutput {
     SetPartitions(Vec<String>),
     SendResult,
+}
+
+impl Drop for MessagesSendDialogModel {
+    fn drop(&mut self) {
+        info!(
+            "Drop[MessagesSendDialogModel]: {:?}, disconnecting events",
+            self.topic
+        );
+        let window = &relm4::main_application().active_window().unwrap();
+        self.signal_handlers.iter().for_each(|signal| {
+            if let Some(s) = signal.take() {
+                window.disconnect(s);
+                info!(
+                    "[MessagesSendDialogModel] unregister events: {:?}, disconnected event {:?}",
+                    self.topic, signal,
+                );
+            }
+        });
+    }
 }
 
 #[relm4::component(pub)]
@@ -188,6 +211,9 @@ impl Component for MessagesSendDialogModel {
                     }
                 },
             },
+            connect_closed[sender] => move |_this| {
+                sender.input(MessagesSendDialogMsg::Close);
+            },
         }
     }
 
@@ -216,43 +242,19 @@ impl Component for MessagesSendDialogModel {
                 sender.input_sender(),
                 MessagesSendDialogMsg::MultiFormatSelected,
             );
-
         let model = MessagesSendDialogModel {
-            connection: connection,
-            topic: topic,
-            partitions_combo: partitions_combo,
+            connection,
+            topic,
+            partitions_combo,
             selected_partition: None,
-            multi_format_combo: multi_format_combo,
+            multi_format_combo,
             selected_multi_format: None,
             is_multiple: false,
+            signal_handlers: vec![],
         };
         let partitions_combo = model.partitions_combo.widget();
         let multi_format_combo = model.multi_format_combo.widget();
 
-        let window = &relm4::main_application().active_window().unwrap();
-        // When the window is maximised or tiled
-        let connect_sender = sender.clone();
-        window.connect_maximized_notify(move |window| {
-            let width = window.width();
-            let height = window.height();
-            info!("window_maximized_notify::{}x{}", width, height);
-            connect_sender.input(MessagesSendDialogMsg::RecalculateDialogSize);
-        });
-        let connect_sender = sender.clone();
-        window.connect_fullscreened_notify(move |window| {
-            let width = window.width();
-            let height = window.height();
-            info!("window_fullscreened_notify::{}x{}", width, height);
-            connect_sender.input(MessagesSendDialogMsg::RecalculateDialogSize);
-        });
-        // When the user manually drags the border of the window
-        let connect_sender = sender.clone();
-        window.connect_default_height_notify(move |window| {
-            let width = window.width();
-            let height = window.height();
-            info!("default_height_notify::{}x{}", width, height);
-            connect_sender.input(MessagesSendDialogMsg::RecalculateDialogSize);
-        });
         let widgets = view_output!();
         sender.input(MessagesSendDialogMsg::LoadPartitions);
         ComponentParts { model, widgets }
@@ -265,7 +267,7 @@ impl Component for MessagesSendDialogModel {
         sender: ComponentSender<Self>,
         root: &Self::Root,
     ) {
-        info!("received message: {:?}", msg);
+        debug!("received message: {:?}", msg);
 
         match msg {
             MessagesSendDialogMsg::RecalculateDialogSize => {
@@ -276,6 +278,7 @@ impl Component for MessagesSendDialogModel {
                 root.queue_allocate();
             }
             MessagesSendDialogMsg::Show => {
+                self.register_window_events(sender.clone());
                 let parent = &relm4::main_application().active_window().unwrap();
                 let (dialog_width, dialog_height) =
                     MessagesSendDialogModel::get_dialog_max_geometry();
@@ -293,6 +296,9 @@ impl Component for MessagesSendDialogModel {
                 } else {
                     self.send_single_message(widgets, sender.clone());
                 }
+            }
+            MessagesSendDialogMsg::Close => {
+                self.unregister_window_events();
             }
             MessagesSendDialogMsg::LoadPartitions => {
                 let connection = self.connection.clone().unwrap();
@@ -328,12 +334,11 @@ impl Component for MessagesSendDialogModel {
                 }
             }
             MessagesSendDialogMsg::MultiFormatSelected(_index) => {
-                let selected_format = self
+                let selected_format = *self
                     .multi_format_combo
                     .model()
                     .get_active_elem()
-                    .unwrap_or(&MultiFormat::default())
-                    .clone();
+                    .unwrap_or(&MultiFormat::default());
                 self.selected_multi_format = Some(selected_format);
             }
         };
@@ -353,7 +358,7 @@ impl Component for MessagesSendDialogModel {
                 let variants = partitions.clone();
                 self.partitions_combo
                     .emit(SimpleComboRowMsg::UpdateData(SimpleComboRow {
-                        variants: variants,
+                        variants,
                         active_index: Some(0),
                     }));
             }
@@ -368,16 +373,60 @@ impl Component for MessagesSendDialogModel {
 }
 
 impl MessagesSendDialogModel {
+    fn register_window_events(&mut self, sender: ComponentSender<MessagesSendDialogModel>) {
+        let window = &relm4::main_application().active_window().unwrap();
+        let mut signal_handlers = Vec::with_capacity(3);
+        // When the window is maximised or tiled
+        let connect_sender = sender.clone();
+        let signal = window.connect_maximized_notify(move |window| {
+            let width = window.width();
+            let height = window.height();
+            debug!("window_maximized_notify::{}x{}", width, height);
+            connect_sender.input(MessagesSendDialogMsg::RecalculateDialogSize);
+        });
+        signal_handlers.push(RefCell::new(Some(signal)));
+        let connect_sender = sender.clone();
+        let signal = window.connect_fullscreened_notify(move |window| {
+            let width = window.width();
+            let height = window.height();
+            debug!("window_fullscreened_notify::{}x{}", width, height);
+            connect_sender.input(MessagesSendDialogMsg::RecalculateDialogSize);
+        });
+        signal_handlers.push(RefCell::new(Some(signal)));
+        // When the user manually drags the border of the window
+        let connect_sender = sender.clone();
+        let signal = window.connect_default_height_notify(move |window| {
+            let width = window.width();
+            let height = window.height();
+            debug!("default_height_notify::{}x{}", width, height);
+            connect_sender.input(MessagesSendDialogMsg::RecalculateDialogSize);
+        });
+        signal_handlers.push(RefCell::new(Some(signal)));
+        self.signal_handlers = signal_handlers;
+    }
+    fn unregister_window_events(&mut self) {
+        let window = &relm4::main_application().active_window().unwrap();
+        self.signal_handlers.iter().for_each(|signal| {
+            if let Some(s) = signal.take() {
+                window.disconnect(s);
+                debug!(
+                    "[MessagesSendDialogModel] unregister events: {:?}, disconnected event {:?}",
+                    self.topic.clone().map(|t| t.name),
+                    signal,
+                );
+            }
+        });
+    }
     fn get_dialog_max_geometry() -> (i32, i32) {
         let (w_width, w_height) = MessagesSendDialogModel::get_display_resolution();
-        info!(
+        debug!(
             "get_dialog_max_geometry::dialog::window::{}x{}",
             w_width, w_height
         );
         let height = ((w_height as f32) * 0.9).ceil() as i32;
         let width = ((w_width as f32) * 0.9).ceil() as i32;
 
-        info!("get_dialog_max_geometry::result::{}x{}", width, height);
+        debug!("get_dialog_max_geometry::result::{}x{}", width, height);
         (width, height)
     }
     fn get_display_resolution() -> (i32, i32) {
@@ -390,7 +439,7 @@ impl MessagesSendDialogModel {
                 if let Some(monitor) = display.monitor_at_surface(&surface) {
                     let height = monitor.geometry().height();
                     let width = monitor.geometry().width();
-                    info!(
+                    debug!(
                         "get_display_resolution::monitor::resolution::{}x{}",
                         width, height
                     );
@@ -405,7 +454,7 @@ impl MessagesSendDialogModel {
             default_geometry
         };
 
-        info!(
+        debug!(
             "get_display_resolution::result::{}x{}",
             resolution_based.0, resolution_based.1
         );
@@ -418,11 +467,11 @@ impl MessagesSendDialogModel {
         sender: ComponentSender<Self>,
     ) {
         let selected_multi_format: MultiFormat = self.selected_multi_format.unwrap_or_else(|| {
-            self.multi_format_combo
+            *self
+                .multi_format_combo
                 .model()
                 .get_active_elem()
                 .unwrap_or(&MultiFormat::default())
-                .clone()
         });
         info!("send_multiple_message::{:?}", self.selected_multi_format);
         let partition = self.selected_partition.unwrap_or(0);
@@ -479,9 +528,7 @@ impl MessagesSendDialogModel {
             None
         };
         if is_multi {
-            key.map_or(vec![], |text| {
-                text.lines().map(|s| s.to_string()).into_iter().collect()
-            })
+            key.map_or(vec![], |text| text.lines().map(|s| s.to_string()).collect())
         } else {
             key.map_or(vec![], |text| vec![text])
         }
@@ -504,9 +551,7 @@ impl MessagesSendDialogModel {
             None
         };
         if is_multi {
-            key.map_or(vec![], |text| {
-                text.lines().map(|s| s.to_string()).into_iter().collect()
-            })
+            key.map_or(vec![], |text| text.lines().map(|s| s.to_string()).collect())
         } else {
             key.map_or(vec![], |text| vec![text])
         }
@@ -555,7 +600,6 @@ impl MessagesSendDialogModel {
                             ("".to_string(), "".to_string())
                         }
                     })
-                    .into_iter()
                     .collect()
             })
         } else {

@@ -2,12 +2,15 @@
 use std::borrow::Borrow;
 
 use adw::prelude::*;
-use gtk::{gdk, gio};
+use gtk::{gdk, gio, Adjustment};
 use relm4::{factory::DynamicIndex, *};
 use relm4_components::simple_adw_combo_row::{SimpleComboRow, SimpleComboRowMsg};
 use tracing::info;
 
-use crate::{backend::repository::{KrustConnection, KrustConnectionSecurityType}, Repository};
+use crate::{
+    backend::repository::{KrustConnection, KrustConnectionSecurityType},
+    Repository,
+};
 
 // Color picker dialog
 #[derive(Debug)]
@@ -21,8 +24,7 @@ impl SimpleComponent for ColorPickerDialog {
     type Root = gtk::ColorDialog;
 
     fn init_root() -> Self::Root {
-        let about = gtk::ColorDialog::builder().build();
-        about
+        gtk::ColorDialog::builder().build()
     }
 
     fn init(
@@ -60,6 +62,7 @@ pub struct ConnectionPageModel {
     sasl_password: String,
     security_type_combo: Controller<SimpleComboRow<KrustConnectionSecurityType>>,
     color_picker_dialog: Controller<ColorPickerDialog>,
+    timeout: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -127,6 +130,19 @@ impl Component for ConnectionPageModel {
 
                         },
                      },
+                    #[name = "timeout_entry"]
+                    adw::SpinRow {
+                        set_title: "Timeout",
+                        set_subtitle: "Connection timeout in seconds",
+                        set_selectable: true,
+                        set_activatable: true,
+                        set_focusable: true,
+                        set_focus_on_click: true,
+                        set_snap_to_ticks: false,
+                        set_numeric: true,
+                        set_wrap: false,
+                        // set_value: model.timeout.unwrap_or_default(),
+                    },
                     gtk::Button {
                         set_label: "Save",
                         add_css_class: "suggested-action",
@@ -195,11 +211,24 @@ impl Component for ConnectionPageModel {
                 .map(|c| c.sasl_password.clone().unwrap_or_default())
                 .unwrap_or_default(),
             current: current_connection,
-            color_picker_dialog: color_picker_dialog,
+            color_picker_dialog,
+            timeout: current
+                .borrow()
+                .as_ref()
+                .map(|c| c.timeout.map(|t| t as f64))
+                .unwrap_or_default(),
         };
         //let security_type_combo = model.security_type_combo.widget();
         let widgets = view_output!();
         model.security_type_combo.widget().queue_allocate();
+        let adjustment = Adjustment::builder()
+            .lower(0.0)
+            .upper(1800.0)
+            .page_size(0.0)
+            .step_increment(10.0)
+            .value(model.timeout.unwrap_or_default())
+            .build();
+        widgets.timeout_entry.set_adjustment(Some(&adjustment));
         ComponentParts { model, widgets }
     }
 
@@ -269,10 +298,13 @@ impl Component for ConnectionPageModel {
                 let security_type = self.security_type.clone();
                 let color = widgets.color_button.rgba();
                 info!("selected color::{:?}", color);
+                let timeout = widgets.timeout_entry.value() as usize;
+                let timeout = if timeout < 1 { None } else { Some(timeout) };
                 widgets.name_entry.set_text("");
                 widgets.brokers_entry.set_text("");
                 widgets.sasl_username_entry.set_text("");
                 widgets.sasl_password_entry.set_text("");
+                widgets.timeout_entry.set_value(0.0);
                 sender
                     .output(ConnectionPageOutput::Save(
                         self.current_index.clone(),
@@ -287,6 +319,7 @@ impl Component for ConnectionPageModel {
                             sasl_mechanism,
                             security_type,
                             color: Some(color.to_string()),
+                            timeout,
                         },
                     ))
                     .unwrap();
@@ -294,10 +327,15 @@ impl Component for ConnectionPageModel {
             }
             ConnectionPageMsg::Edit(index, connection) => {
                 let idx = Some(index.clone());
-                let connection = Repository::new().connection_by_id(connection.id.unwrap()).unwrap();
-                let color = connection.color.clone().unwrap_or("rgb(183, 243, 155)".to_string());
-                    let color = gdk::RGBA::parse(color).expect("Should return RGBA color");
-                    widgets.color_button.set_rgba(&color);
+                let connection = Repository::new()
+                    .connection_by_id(connection.id.unwrap())
+                    .unwrap();
+                let color = connection
+                    .color
+                    .clone()
+                    .unwrap_or("rgb(183, 243, 155)".to_string());
+                let color = gdk::RGBA::parse(color).expect("Should return RGBA color");
+                widgets.color_button.set_rgba(&color);
                 let conn = connection.clone();
                 self.current_index = idx;
                 self.current = Some(connection);
@@ -307,6 +345,7 @@ impl Component for ConnectionPageModel {
                 self.sasl_mechanism = conn.sasl_mechanism.unwrap_or_default();
                 self.sasl_username = conn.sasl_username.unwrap_or_default();
                 self.sasl_password = conn.sasl_password.unwrap_or_default();
+                self.timeout = conn.timeout.map(|t| t as f64);
                 widgets.name_entry.set_text(self.name.clone().as_str());
                 widgets
                     .brokers_entry
@@ -333,6 +372,9 @@ impl Component for ConnectionPageModel {
                 widgets.sasl_mechanism_entry.set_sensitive(sasl_visible);
                 widgets.sasl_username_entry.set_sensitive(sasl_visible);
                 widgets.sasl_password_entry.set_sensitive(sasl_visible);
+                widgets
+                    .timeout_entry
+                    .set_value(self.timeout.unwrap_or_default());
                 root.queue_allocate();
                 let parent = &relm4::main_application().active_window().unwrap();
                 root.present(parent);
