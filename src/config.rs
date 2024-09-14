@@ -26,6 +26,8 @@ pub enum ExternalError {
     ConfigurationError(String),
     #[error("error caching messages for topic {0}, duration: {1}")]
     CachingError(String, String),
+    #[error("Error {0}: {1}")]
+    DisplayError(String, String),
 }
 
 /// Application state that is not intended to be directly configurable by the user. The state is

@@ -1,5 +1,6 @@
 use futures::future;
-use rdkafka::client::ClientContext;
+use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
+use rdkafka::client::{ClientContext, DefaultClientContext};
 use rdkafka::config::{ClientConfig, FromClientConfigAndContext, RDKafkaLogLevel};
 use rdkafka::consumer::BaseConsumer;
 use rdkafka::consumer::{Consumer, ConsumerContext};
@@ -61,6 +62,13 @@ impl KafkaFetch {
 }
 
 #[derive(Debug, Clone)]
+pub struct CreateTopicRequest {
+    pub name: String,
+    pub partition_count: u16,
+    pub replica_count: u8,
+}
+
+#[derive(Debug, Clone)]
 pub struct KafkaBackend {
     pub config: KrustConnection,
 }
@@ -84,10 +92,11 @@ impl KafkaBackend {
         info!("kafka::connection::timeout: {:?}", timeout);
         timeout
     }
-    fn producer(&self) -> Result<FutureProducer, KafkaError> {
-        let producer: Result<FutureProducer, KafkaError> = match self.config.security_type {
+    fn create_config(&self) -> ClientConfig {
+        let mut config = ClientConfig::new();
+        match self.config.security_type {
             KrustConnectionSecurityType::SASL_PLAINTEXT => {
-                ClientConfig::new()
+                config
                     .set("bootstrap.servers", self.config.brokers_list.clone())
                     .set("group.id", GROUP_ID)
                     .set("enable.partition.eof", "false")
@@ -111,10 +120,9 @@ impl KafkaBackend {
                     )
                     //.set("sasl.jaas.config", self.config.jaas_config.clone().unwrap_or_default())
                     .set_log_level(RDKafkaLogLevel::Debug)
-                    .create()
             }
             _ => {
-                ClientConfig::new()
+                config
                     .set("bootstrap.servers", self.config.brokers_list.clone())
                     .set("group.id", GROUP_ID)
                     .set("enable.partition.eof", "false")
@@ -123,56 +131,44 @@ impl KafkaBackend {
                     .set("message.timeout.ms", "5000")
                     //.set("statistics.interval.ms", "30000")
                     .set("auto.offset.reset", "earliest")
-                    .create()
             }
-        };
-        producer
+        }
+        .to_owned()
+    }
+    fn producer(&self) -> Result<FutureProducer, KafkaError> {
+        self.create_config().create()
     }
     fn consumer<C, T>(&self, context: C) -> KafkaResult<T>
     where
         C: ClientContext,
         T: FromClientConfigAndContext<C>,
     {
-        match self.config.security_type {
-            KrustConnectionSecurityType::SASL_PLAINTEXT => {
-                ClientConfig::new()
-                    .set("bootstrap.servers", self.config.brokers_list.clone())
-                    .set("group.id", GROUP_ID)
-                    .set("enable.partition.eof", "false")
-                    .set("session.timeout.ms", "6000")
-                    .set("enable.auto.commit", "false")
-                    //.set("statistics.interval.ms", "30000")
-                    .set("auto.offset.reset", "earliest")
-                    .set("security.protocol", self.config.security_type.to_string())
-                    .set(
-                        "sasl.mechanisms",
-                        self.config.sasl_mechanism.clone().unwrap_or_default(),
-                    )
-                    .set(
-                        "sasl.username",
-                        self.config.sasl_username.clone().unwrap_or_default(),
-                    )
-                    .set(
-                        "sasl.password",
-                        self.config.sasl_password.clone().unwrap_or_default(),
-                    )
-                    //.set("sasl.jaas.config", self.config.jaas_config.clone().unwrap_or_default())
-                    //.set("debug", "all")
-                    .set_log_level(RDKafkaLogLevel::Debug)
-                    .create_with_context::<C, T>(context)
-            }
-            _ => {
-                ClientConfig::new()
-                    .set("bootstrap.servers", self.config.brokers_list.clone())
-                    .set("group.id", GROUP_ID)
-                    .set("enable.partition.eof", "false")
-                    .set("session.timeout.ms", "6000")
-                    .set("enable.auto.commit", "false")
-                    //.set("statistics.interval.ms", "30000")
-                    .set("auto.offset.reset", "earliest")
-                    .create_with_context::<C, T>(context)
-            }
-        }
+        self.create_config().create_with_context(context)
+    }
+    fn create_admin_client(&self) -> Result<AdminClient<DefaultClientContext>, KafkaError> {
+        self.create_config().create()
+        //.expect("admin client creation failed")
+    }
+
+    pub async fn create_topic(self, request: &CreateTopicRequest) -> Result<bool, ExternalError> {
+        let admin_client = self.create_admin_client()?;
+        let opts = AdminOptions::new().operation_timeout(Some(self.timeout()));
+        let topic = NewTopic::new(
+            &request.name,
+            request.partition_count as i32,
+            TopicReplication::Fixed(request.replica_count as i32),
+        );
+        admin_client.create_topics(vec![&topic], &opts).await?;
+        Ok(true)
+    }
+
+    pub async fn delete_topic(self, topic_name: String) -> Result<bool, ExternalError> {
+        let admin_client = self.create_admin_client()?;
+        let opts = AdminOptions::new().operation_timeout(Some(self.timeout()));
+        admin_client
+            .delete_topics(&[topic_name.as_str()], &opts)
+            .await?;
+        Ok(true)
     }
 
     pub async fn list_topics(&self) -> Result<Vec<KrustTopic>, ExternalError> {

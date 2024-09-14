@@ -681,7 +681,13 @@ impl Repository {
             "DELETE FROM kr_connection
             WHERE id = :cid",
         )?;
-
+        let mut topics_stmt_by_id = self.conn.prepare_cached(
+            "DELETE FROM kr_topic
+            WHERE connection_id = :cid",
+        )?;
+        topics_stmt_by_id
+            .execute(named_params! { ":cid": &conn_id,})
+            .map_err(ExternalError::DatabaseError)?;
         stmt_by_id
             .execute(named_params! { ":cid": &conn_id,})
             .map_err(ExternalError::DatabaseError)
