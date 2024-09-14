@@ -1,7 +1,11 @@
+use fs_extra::dir::get_size;
 use gtk::prelude::GtkWindowExt;
+use humansize::{format_size, DECIMAL};
 use relm4::{adw, gtk, ComponentParts, ComponentSender, SimpleComponent};
+use sysinfo::Disks;
+use tracing::*;
 
-use crate::{APP_ID, APP_NAME, VERSION};
+use crate::{Settings, APP_ID, APP_NAME, VERSION};
 
 #[derive(Debug)]
 pub struct AboutDialog {}
@@ -31,7 +35,11 @@ impl SimpleComponent for AboutDialog {
             .designers(vec!["Miguel A. Baldi Hörlle"])
             .hide_on_close(true)
             .build();
-        let ack = &["Adelar Escobar Vieira", "Francivaldo Napoleão Herculano", "Jessica dos Santos Rodrigues"];
+        let ack = &[
+            "Adelar Escobar Vieira",
+            "Francivaldo Napoleão Herculano",
+            "Jessica dos Santos Rodrigues",
+        ];
         about.add_acknowledgement_section(Some("Special thanks to"), ack);
         about
     }
@@ -49,6 +57,19 @@ impl SimpleComponent for AboutDialog {
     }
 
     fn update_view(&self, dialog: &mut Self::Widgets, _sender: ComponentSender<Self>) {
+        let disks = Disks::new_with_refreshed_list();
+        let settings = Settings::read().unwrap_or_default();
+        let cache_dir_size = format_size(get_size(settings.cache_dir).unwrap_or(0), DECIMAL);
+        info!("[DISK] Cache directory size: {}", cache_dir_size);
+        for disk in disks.list() {
+            info!(
+                "[DISK]{:?}: {:?}:{:?} / {}",
+                disk.name(),
+                disk.kind(),
+                disk.mount_point(),
+                format_size(disk.total_space(), DECIMAL),
+            );
+        }
         dialog.present();
     }
 }

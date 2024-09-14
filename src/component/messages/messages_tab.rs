@@ -16,14 +16,16 @@ use relm4::{
 };
 use relm4_components::simple_combo_box::SimpleComboBox;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, trace, warn};
+use tracing::*;
 use uuid::Uuid;
 
+use crate::backend::kafka::KafkaBackend;
 use crate::backend::repository::MessagesSearchOrder;
 use crate::backend::settings::Settings;
 use crate::backend::worker::MessagesTotalCounterRequest;
 use crate::component::settings_dialog::MessagesSortOrder;
 use crate::component::task_manager::{Task, TaskManagerMsg, TaskVariant, TASK_MANAGER_BROKER};
+use crate::modals::utils::show_error_alert;
 use crate::{
     backend::{
         kafka::KafkaFetch,
@@ -58,6 +60,8 @@ relm4::new_stateless_action!(pub(super) CopyMessagesAsCsv, MessagesListActionGro
 relm4::new_stateless_action!(pub(super) CopyMessagesKeyValue, MessagesListActionGroup, "copy-messages-key-value");
 relm4::new_stateless_action!(pub(super) CopyMessagesValue, MessagesListActionGroup, "copy-messages-value");
 relm4::new_stateless_action!(pub(super) CopyMessagesKey, MessagesListActionGroup, "copy-messages-key");
+relm4::new_stateless_action!(pub(super) ResendMessagesKeyValue, MessagesListActionGroup, "resend-messages-key-value");
+relm4::new_stateless_action!(pub(super) ResendMessagesValue, MessagesListActionGroup, "resend-messages-value");
 
 pub struct MessagesTabModel {
     token: CancellationToken,
@@ -109,6 +113,7 @@ pub enum MessagesTabMsg {
     ToggleMode(bool),
     DigitsOnly(f64),
     CopyMessages(Copy),
+    ResendMessages(Copy),
     AddMessages,
     SetCacheOrder(Option<String>, String),
 }
@@ -118,6 +123,7 @@ pub enum CommandMsg {
     Data(MessagesResponse),
     CopyToClipboard(String, String),
     RefreshTotalCounterResult(String, usize),
+    MessagesResendResult(String, Option<()>),
 }
 
 const AVAILABLE_PAGE_SIZES: [u16; 7] = [1000, 2000, 5000, 7000, 10000, 20000, 50000];
@@ -137,6 +143,8 @@ impl FactoryComponent for MessagesTabModel {
                 "_Copy key,value" => CopyMessagesKeyValue,
                 "_Copy value" => CopyMessagesValue,
                 "_Copy key" => CopyMessagesKey,
+                "_Resend message(s) with key/value" => ResendMessagesKeyValue,
+                "_Resend message(s) with value only" => ResendMessagesValue,
             }
         }
     }
@@ -478,10 +486,26 @@ impl FactoryComponent for MessagesTabModel {
                 .send(MessagesTabMsg::CopyMessages(Copy::Key))
                 .unwrap();
         });
+        let messages_menu_sender = sender.input_sender().clone();
+        let menu_resend_key_value_action =
+            RelmAction::<ResendMessagesKeyValue>::new_stateless(move |_| {
+                messages_menu_sender
+                    .send(MessagesTabMsg::ResendMessages(Copy::KeyValue))
+                    .unwrap();
+            });
+        let messages_menu_sender = sender.input_sender().clone();
+        let menu_resend_value_action =
+            RelmAction::<ResendMessagesValue>::new_stateless(move |_| {
+                messages_menu_sender
+                    .send(MessagesTabMsg::ResendMessages(Copy::Value))
+                    .unwrap();
+            });
         messages_actions.add_action(menu_copy_all_csv_action);
         messages_actions.add_action(menu_copy_key_value_action);
         messages_actions.add_action(menu_copy_value_action);
         messages_actions.add_action(menu_copy_key_action);
+        messages_actions.add_action(menu_resend_key_value_action);
+        messages_actions.add_action(menu_resend_value_action);
         messages_actions.register_for_widget(&messages_popover_menu);
 
         let add_messages = MessagesSendDialogModel::builder()
@@ -645,9 +669,6 @@ impl FactoryComponent for MessagesTabModel {
                     widgets.cached_controls.set_visible(false);
                     widgets.cached_centered_controls.set_visible(false);
                     widgets.live_centered_controls.set_visible(true);
-                    // widgets.cache_timestamp.set_visible(false);
-                    // widgets.cache_timestamp.set_text("");
-
                     MessagesMode::Live
                 };
             }
@@ -701,6 +722,42 @@ impl FactoryComponent for MessagesTabModel {
                     } else {
                         CommandMsg::CopyToClipboard(id.to_string(), String::default())
                     }
+                });
+            }
+            MessagesTabMsg::ResendMessages(copy) => {
+                info!("resend selected messages");
+                let topic = self.topic.clone().unwrap().name;
+                let mut selected_items = vec![];
+                for i in 0..self.messages_wrapper.selection_model.n_items() {
+                    if self.messages_wrapper.selection_model.is_selected(i) {
+                        let item = self.messages_wrapper.get_visible(i).unwrap();
+                        selected_items.push(KrustMessage {
+                            headers: item.borrow().headers.clone(),
+                            topic: topic.clone(),
+                            partition: item.borrow().partition,
+                            offset: item.borrow().offset,
+                            key: match copy {
+                                Copy::KeyValue => Some(item.borrow().key.clone()),
+                                _ => None,
+                            },
+                            value: item.borrow().value.clone(),
+                            timestamp: item.borrow().timestamp,
+                        });
+                    }
+                }
+                selected_items.sort_by(|a, b| a.timestamp.partial_cmp(&b.timestamp).unwrap());
+                let connection = self.connection.clone().unwrap();
+                sender.oneshot_command(async move {
+                    let id = Uuid::new_v4();
+                    TOASTER_BROKER.send(AppMsg::ShowToast(
+                        id.to_string(),
+                        "Resending...".to_string(),
+                    ));
+                    debug!("sending messages::{:?}", &selected_items);
+                    // Run async background task
+                    let kafka = KafkaBackend::new(&connection);
+                    kafka.send_messages(&topic, &selected_items).await;
+                    CommandMsg::MessagesResendResult(id.to_string(), Some(()))
                 });
             }
             MessagesTabMsg::Open(connection, topic) => {
@@ -1001,6 +1058,15 @@ impl FactoryComponent for MessagesTabModel {
         sender: FactorySender<Self>,
     ) {
         match message {
+            CommandMsg::MessagesResendResult(task_id, result) => {
+                if result.is_some() {
+                    info!("messages resent!");
+                } else {
+                    let main_window = main_application().active_window().unwrap();
+                    show_error_alert(&main_window, "Unable to send messages".to_string());
+                }
+                TOASTER_BROKER.send(AppMsg::HideToast(task_id));
+            }
             CommandMsg::Data(messages) => {
                 sender.input(MessagesTabMsg::UpdateMessages(Box::new(messages)))
             }

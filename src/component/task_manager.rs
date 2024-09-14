@@ -322,6 +322,7 @@ impl Component for TaskManagerModel {
                 #[wrap(Some)]
                 set_child = model.sidebar_list_wrapper.view.borrow() -> &gtk::ListView {
                     set_valign: gtk::Align::Center,
+                    set_halign: gtk::Align::Center,
                 },
             }
         }
@@ -438,6 +439,7 @@ impl Component for TaskManagerModel {
     ) {
         match message {
             TaskManagerCommand::RemoveTask(task) => {
+                debug!("TaskManagerCommand::RemoveTask[{:?}]", task);
                 let maybe_index = self
                     .sidebar_list_wrapper
                     .find(|t| t.variant == task.variant);
@@ -463,6 +465,7 @@ impl Component for TaskManagerModel {
                 }
             }
             TaskManagerCommand::RemoveSidebarTask(idx) => {
+                debug!("TaskManagerCommand::RemoveSidebarTask[{}]", idx);
                 self.sidebar_list_wrapper.remove(idx);
                 widgets.tasks_popover.popdown();
                 widgets.tasks_button.set_sensitive(false);

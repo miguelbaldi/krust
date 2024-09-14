@@ -89,7 +89,7 @@ impl Component for ConnectionPageModel {
         #[root]
         adw::PreferencesDialog {
             set_title: "Connection",
-            set_height_request: 500,
+            set_height_request: 570,
             add = &adw::PreferencesPage {
                 add = &adw::PreferencesGroup {
                     #[name = "name_entry" ]

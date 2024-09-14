@@ -5,7 +5,7 @@ use rdkafka::config::{ClientConfig, FromClientConfigAndContext, RDKafkaLogLevel}
 use rdkafka::consumer::BaseConsumer;
 use rdkafka::consumer::{Consumer, ConsumerContext};
 use rdkafka::error::{KafkaError, KafkaResult};
-use rdkafka::message::Headers;
+use rdkafka::message::{Header, Headers, OwnedHeaders};
 
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::topic_partition_list::TopicPartitionList;
@@ -252,22 +252,26 @@ impl KafkaBackend {
             .map(|message| async move {
                 // The send operation on the topic returns a future, which will be
                 // completed once the result or failure from Kafka is received.
+                let mut kheaders = OwnedHeaders::new();
+                for h in message.headers.clone().iter() {
+                    let value = h.value.as_ref();
+                    let key = h.key.as_str();
+                    let header = Header { key, value };
+                    kheaders = kheaders.insert(header);
+                }
                 let delivery_status = producer
                     .send(
                         FutureRecord::to(topic)
                             .partition(message.partition)
                             .payload(&message.value)
-                            .key(&message.key.clone().unwrap_or_default()),
-                        // .headers(OwnedHeaders::new().insert(Header {
-                        //     key: "header_key",
-                        //     value: Some("header_value"),
-                        // })),
+                            .key(&message.key.clone().unwrap_or_default())
+                            .headers(kheaders),
                         Duration::from_secs(0),
                     )
                     .await;
 
                 // This will be executed when the result is received.
-                info!("Delivery status for message {:?} received", message);
+                trace!("Delivery status for message {:?} received", message);
                 delivery_status
             })
             .collect::<Vec<_>>();
