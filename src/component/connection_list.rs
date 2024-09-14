@@ -16,8 +16,7 @@ pub enum KrustConnectionMsg {
     Connect,
     Disconnect,
     Edit(DynamicIndex),
-    Remove(DynamicIndex),
-    //ConfirmRemove,
+    Remove,
     Refresh,
 }
 
@@ -98,8 +97,8 @@ impl FactoryComponent for ConnectionListModel {
                 set_tooltip_text: Some("Delete connection"),
                 set_icon_name: "edit-delete-symbolic",
                 add_css_class: "circular",
-                connect_clicked[sender, index] => move |_| {
-                    sender.input(KrustConnectionMsg::Remove(index.clone()));
+                connect_clicked[sender] => move |_| {
+                    sender.input(KrustConnectionMsg::Remove);
                 },
             },
             #[name(label)]
@@ -191,7 +190,7 @@ impl FactoryComponent for ConnectionListModel {
                     .output(KrustConnectionOutput::Edit(index, self.into()))
                     .unwrap();
             }
-            KrustConnectionMsg::Remove(index) => {
+            KrustConnectionMsg::Remove => {
                 info!("Delete request for {}", self.name);
                 let main_window = main_application().active_window().unwrap();
                 self.confirm_delete_alert.present(&main_window);
