@@ -6,8 +6,8 @@ use std::str::FromStr;
 use chrono::{TimeZone, Utc};
 use chrono_tz::America;
 use csv::StringRecord;
-use gtk::prelude::*;
 use gtk::{gdk::Rectangle, ColumnViewSorter};
+use gtk::{prelude::*, ColumnViewColumn, SortType};
 use relm4::{
     actions::{RelmAction, RelmActionGroup},
     factory::{DynamicIndex, FactoryComponent},
@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, trace, warn};
 use uuid::Uuid;
 
+use crate::backend::repository::MessagesSearchOrder;
 use crate::backend::settings::Settings;
 use crate::backend::worker::MessagesTotalCounterRequest;
 use crate::component::settings_dialog::MessagesSortOrder;
@@ -28,8 +29,7 @@ use crate::{
         kafka::KafkaFetch,
         repository::{KrustConnection, KrustMessage, KrustTopic},
         worker::{
-            MessagesCleanupRequest, MessagesMode, MessagesRequest, MessagesResponse,
-            MessagesWorker, PageOp,
+            MessagesCleanupRequest, MessagesMode, MessagesRequest, MessagesResponse, MessagesWorker,
         },
     },
     component::{
@@ -74,6 +74,7 @@ pub struct MessagesTabModel {
     messages_menu_popover: gtk::PopoverMenu,
     add_messages: Controller<MessagesSendDialogModel>,
     clipboard: Box<dyn ClipboardProvider>,
+    cache_search_order: Option<MessagesSearchOrder>,
 }
 
 pub struct MessagesTabInit {
@@ -90,15 +91,16 @@ pub enum Copy {
 
 #[derive(Debug)]
 pub enum MessagesTabMsg {
-    Open(KrustConnection, KrustTopic),
+    Open(Box<KrustConnection>, Box<KrustTopic>),
     GetMessages,
     GetNextMessages,
     GetPreviousMessages,
+    GotoPage,
     StopGetMessages,
     RefreshCache,
     DestroyCache,
     RefreshTotalCounter,
-    UpdateMessages(MessagesResponse),
+    UpdateMessages(Box<MessagesResponse>),
     OpenMessage(u32),
     SearchMessages,
     LiveSearchMessages(String),
@@ -108,6 +110,7 @@ pub enum MessagesTabMsg {
     DigitsOnly(f64),
     CopyMessages(Copy),
     AddMessages,
+    SetCacheOrder(Option<String>, String),
 }
 
 #[derive(Debug)]
@@ -328,10 +331,19 @@ impl FactoryComponent for MessagesTabModel {
                             set_orientation: gtk::Orientation::Horizontal,
                             set_halign: gtk::Align::Start,
                             set_hexpand: true,
+                            #[name(btn_goto_page)]
+                            gtk::Button {
+                                set_tooltip_text: Some("Refresh messages total counter"),
+                                set_icon_name: "media-skip-forward",
+                                set_margin_start: 5,
+                                connect_clicked[sender] => move |_| {
+                                    sender.input(MessagesTabMsg::GotoPage);
+                                },
+                            },
                             #[name(pag_current_entry)]
                             gtk::Entry {
-                                set_editable: false,
-                                set_sensitive: false,
+                                set_editable: true,
+                                set_sensitive: true,
                                 set_margin_start: 5,
                                 set_width_chars: 10,
                             },
@@ -359,26 +371,6 @@ impl FactoryComponent for MessagesTabModel {
                             set_orientation: gtk::Orientation::Horizontal,
                             set_halign: gtk::Align::Start,
                             set_hexpand: true,
-                            #[name(first_offset)]
-                            gtk::Label {
-                                set_label: "",
-                                set_visible: false,
-                            },
-                            #[name(first_partition)]
-                            gtk::Label {
-                                set_label: "",
-                                set_visible: false,
-                            },
-                            #[name(last_offset)]
-                            gtk::Label {
-                                set_label: "",
-                                set_visible: false,
-                            },
-                            #[name(last_partition)]
-                            gtk::Label {
-                                set_label: "",
-                                set_visible: false,
-                            },
                             gtk::Label {
                                 set_label: "Page size",
                                 set_margin_start: 5,
@@ -512,6 +504,7 @@ impl FactoryComponent for MessagesTabModel {
             messages_menu_popover: messages_popover_menu,
             add_messages,
             clipboard,
+            cache_search_order: None,
         };
         let messages_view = &model.messages_wrapper.view;
         let sender_for_selection = sender.clone();
@@ -533,6 +526,7 @@ impl FactoryComponent for MessagesTabModel {
                 }
             });
 
+        let snd = sender.clone();
         messages_view
             .sorter()
             .unwrap()
@@ -540,19 +534,34 @@ impl FactoryComponent for MessagesTabModel {
                 let order = sorter.order();
                 let csorter: &ColumnViewSorter = sorter.downcast_ref().unwrap();
                 info!("sort order changed: {:?}:{:?}", change, order);
-                for i in 0..=csorter.n_sort_columns() {
-                    let (cvc, sort) = csorter.nth_sort_column(i);
-                    info!(
-                        "column[{:?}]sort[{:?}]",
-                        cvc.map(|col| { col.title() }),
-                        sort
-                    );
+                if csorter.n_sort_columns() > 0 {
+                    let (cvc, sort) = csorter.nth_sort_column(0);
+                    if let Some(col) = cvc {
+                        let col_name: Option<String> = col.title().map(|s| s.to_string());
+                        if let Some(col_name) = col_name {
+                            let col_name = match col_name.as_str() {
+                                "Offset" => Some("offset"),
+                                "Partition" => Some("partition"),
+                                "Date/time (Timestamp)" => Some("timestamp"),
+                                _ => None,
+                            }
+                            .map(|s| s.to_string());
+                            let order = match sort {
+                                SortType::Ascending => "ASC",
+                                SortType::Descending => "DESC",
+                                _ => "ASC",
+                            }
+                            .to_string();
+                            info!("order selected column[{:?}]sort[{:?}]", col_name, order);
+                            snd.input(MessagesTabMsg::SetCacheOrder(col_name, order));
+                        }
+                    }
                 }
             });
 
         sender.input(MessagesTabMsg::Open(
-            model.connection.clone().unwrap(),
-            model.topic.clone().unwrap(),
+            Box::new(model.connection.clone().unwrap()),
+            Box::new(model.topic.clone().unwrap()),
         ));
         model
     }
@@ -603,6 +612,14 @@ impl FactoryComponent for MessagesTabModel {
         sender: FactorySender<Self>,
     ) {
         match msg {
+            MessagesTabMsg::SetCacheOrder(maybe_column, order) => {
+                let cache_messages_order =
+                    maybe_column.map(|column| MessagesSearchOrder { column, order });
+                self.cache_search_order = cache_messages_order;
+                if let MessagesMode::Cached { refresh: _ } = self.mode {
+                    sender.input(MessagesTabMsg::GetMessages);
+                }
+            }
             MessagesTabMsg::AddMessages => {
                 self.add_messages.emit(MessagesSendDialogMsg::Show);
             }
@@ -690,10 +707,10 @@ impl FactoryComponent for MessagesTabModel {
                 let timestamp_format = Settings::read().unwrap_or_default().timestamp_formatter();
                 let conn_id = &connection.id.unwrap();
                 let topic_name = &topic.name.clone();
-                self.connection = Some(connection);
+                self.connection = Some(*connection);
                 let mut repo = Repository::new();
                 let maybe_topic = repo.find_topic(*conn_id, topic_name);
-                self.topic = maybe_topic.clone().or(Some(topic));
+                self.topic = maybe_topic.clone().or(Some(*topic));
                 let toggled = match &maybe_topic {
                     Some(t) => t.cached.is_some(),
                     None => false,
@@ -728,7 +745,7 @@ impl FactoryComponent for MessagesTabModel {
                             .add_filter(move |item| item.value.contains(search_term.as_str()));
                         let total = widgets.messages_view.model().unwrap().n_items();
                         info!("Total messages::{}", total);
-                        fill_pagination(PageOp::Next, widgets, total as usize, 0, None, None);
+                        fill_pagination(widgets, total as usize, 0);
                     }
                     MessagesMode::Cached { refresh: _ } => (),
                 };
@@ -743,6 +760,9 @@ impl FactoryComponent for MessagesTabModel {
                         sender.input(MessagesTabMsg::GetMessages)
                     }
                 };
+            }
+            MessagesTabMsg::GotoPage => {
+                sender.input(MessagesTabMsg::GetMessages);
             }
             MessagesTabMsg::GetMessages => {
                 info!("[GetMessages] {}", self.mode);
@@ -762,10 +782,19 @@ impl FactoryComponent for MessagesTabModel {
                     self.token = CancellationToken::new();
                 }
                 let page_size = self.page_size;
+                let page: usize = widgets
+                    .pag_current_entry
+                    .text()
+                    .to_string()
+                    .parse()
+                    .unwrap_or(1);
+                let search_order = self.cache_search_order.clone();
                 let search = get_search_term(widgets);
                 let fetch = self.fetch_type.clone();
                 let max_messages: i64 = self.max_messages as i64;
-                widgets.pag_current_entry.set_text("0");
+                widgets
+                    .pag_current_entry
+                    .set_text(page.to_string().as_str());
                 let task_name = topic.name.clone();
                 let task = Task::new(
                     TaskVariant::FetchMessages,
@@ -783,9 +812,9 @@ impl FactoryComponent for MessagesTabModel {
                             mode,
                             connection: conn,
                             topic: topic.clone(),
-                            page_operation: PageOp::Next,
+                            page,
+                            search_order,
                             page_size,
-                            offset_partition: (0, 0),
                             search,
                             fetch,
                             max_messages,
@@ -798,124 +827,40 @@ impl FactoryComponent for MessagesTabModel {
                 });
             }
             MessagesTabMsg::GetNextMessages => {
-                STATUS_BROKER.send(StatusBarMsg::Start);
-                on_loading(widgets, false);
-                let mode = self.mode;
-                let topic = self.topic.clone().unwrap();
-                let conn = self.connection.clone().unwrap();
-                if self.token.is_cancelled() {
-                    self.token = CancellationToken::new();
-                }
                 let page_size = self.page_size;
-                let (offset, partition) = (
-                    widgets
-                        .last_offset
-                        .text()
-                        .to_string()
-                        .parse::<usize>()
-                        .unwrap(),
-                    widgets
-                        .last_partition
-                        .text()
-                        .to_string()
-                        .parse::<usize>()
-                        .unwrap(),
-                );
-                let search = get_search_term(widgets);
-                let fetch = self.fetch_type.clone();
-                let max_messages: i64 = self.max_messages as i64;
+                let page: usize = widgets
+                    .pag_current_entry
+                    .text()
+                    .to_string()
+                    .parse()
+                    .unwrap_or(1)
+                    + 1;
+                widgets
+                    .pag_current_entry
+                    .set_text(page.to_string().as_str());
                 info!(
-                    "getting next messages [page_size={}, last_offset={}, last_partition={}]",
-                    page_size, offset, partition
+                    "getting next messages [page_size={}, page={}]",
+                    page_size, page
                 );
-                let task_name = topic.name.clone();
-                let task = Task::new(
-                    TaskVariant::FetchMessages,
-                    Some(task_name),
-                    Some(self.token.clone()),
-                );
-                TOASTER_BROKER.send(AppMsg::ShowToast(task.id.clone(), "Working...".to_string()));
-                TASK_MANAGER_BROKER.send(TaskManagerMsg::AddTask(task.clone()));
-                sender.oneshot_command(async move {
-                    // Run async background task
-                    let messages_worker = MessagesWorker::new();
-                    let result = &messages_worker
-                        .get_messages(&MessagesRequest {
-                            task: Some(task.clone()),
-                            mode,
-                            connection: conn,
-                            topic: topic.clone(),
-                            page_operation: PageOp::Next,
-                            page_size,
-                            offset_partition: (offset, partition),
-                            search,
-                            fetch,
-                            max_messages,
-                        })
-                        .await
-                        .unwrap();
-                    let total = result.total;
-                    trace!("selected topic {} with {} messages", topic.name, &total,);
-                    CommandMsg::Data(result.clone())
-                });
+                sender.input(MessagesTabMsg::GetMessages);
             }
             MessagesTabMsg::GetPreviousMessages => {
-                STATUS_BROKER.send(StatusBarMsg::Start);
-                on_loading(widgets, false);
-                let mode = self.mode;
-                let topic = self.topic.clone().unwrap();
-                let conn = self.connection.clone().unwrap();
-                if self.token.is_cancelled() {
-                    self.token = CancellationToken::new();
-                }
                 let page_size = self.page_size;
-                let (offset, partition) = (
-                    widgets
-                        .first_offset
-                        .text()
-                        .to_string()
-                        .parse::<usize>()
-                        .unwrap(),
-                    widgets
-                        .first_partition
-                        .text()
-                        .to_string()
-                        .parse::<usize>()
-                        .unwrap(),
+                let page: usize = widgets
+                    .pag_current_entry
+                    .text()
+                    .to_string()
+                    .parse()
+                    .unwrap_or(1)
+                    - 1;
+                widgets
+                    .pag_current_entry
+                    .set_text(page.to_string().as_str());
+                info!(
+                    "getting previous messages [page_size={}, page={}]",
+                    page_size, page
                 );
-                let search = get_search_term(widgets);
-                let fetch = self.fetch_type.clone();
-                let max_messages: i64 = self.max_messages as i64;
-                let task_name = topic.name.clone();
-                let task = Task::new(
-                    TaskVariant::FetchMessages,
-                    Some(task_name),
-                    Some(self.token.clone()),
-                );
-                TOASTER_BROKER.send(AppMsg::ShowToast(task.id.clone(), "Working...".to_string()));
-                TASK_MANAGER_BROKER.send(TaskManagerMsg::AddTask(task.clone()));
-                sender.oneshot_command(async move {
-                    // Run async background task
-                    let messages_worker = MessagesWorker::new();
-                    let result = &messages_worker
-                        .get_messages(&MessagesRequest {
-                            task: Some(task.clone()),
-                            mode,
-                            connection: conn,
-                            topic: topic.clone(),
-                            page_operation: PageOp::Prev,
-                            page_size,
-                            offset_partition: (offset, partition),
-                            search,
-                            fetch,
-                            max_messages,
-                        })
-                        .await
-                        .unwrap();
-                    let total = result.total;
-                    trace!("selected topic {} with {} messages", topic.name, &total,);
-                    CommandMsg::Data(result.clone())
-                });
+                sender.input(MessagesTabMsg::GetMessages);
             }
             MessagesTabMsg::RefreshCache => {
                 info!("refreshing cached messages");
@@ -985,33 +930,32 @@ impl FactoryComponent for MessagesTabModel {
                     MessagesMode::Cached { refresh: _ } => self.messages_wrapper.clear(),
                 }
                 on_loading(widgets, true);
-                fill_pagination(
-                    response.page_operation,
-                    widgets,
-                    total,
-                    response.page_size,
-                    response.messages.first(),
-                    response.messages.last(),
-                );
-                let sort_column = settings.messages_sort_column;
-                let sort_column = self
-                    .messages_wrapper
-                    .get_columns()
-                    .get(sort_column.as_str());
-                let sort_order =
-                    MessagesSortOrder::from_str(settings.messages_sort_column_order.as_str())
-                        .unwrap_or_default();
-                let sort_type = match sort_order {
-                    MessagesSortOrder::Ascending => gtk::SortType::Ascending,
-                    MessagesSortOrder::Descending => gtk::SortType::Descending,
-                    MessagesSortOrder::Default => match self.fetch_type {
-                        KafkaFetch::Newest => gtk::SortType::Descending,
-                        KafkaFetch::Oldest => gtk::SortType::Ascending,
-                    },
+                fill_pagination(widgets, total, response.page_size);
+                if self.mode == MessagesMode::Live {
+                    let sort_column = settings.messages_sort_column;
+                    let sort_column: Option<&ColumnViewColumn> = self
+                        .messages_wrapper
+                        .get_columns()
+                        .get(sort_column.as_str());
+                    let sort_order =
+                        MessagesSortOrder::from_str(settings.messages_sort_column_order.as_str())
+                            .unwrap_or_default();
+                    let sort_type = match sort_order {
+                        MessagesSortOrder::Ascending => gtk::SortType::Ascending,
+                        MessagesSortOrder::Descending => gtk::SortType::Descending,
+                        MessagesSortOrder::Default => match self.fetch_type {
+                            KafkaFetch::Newest => gtk::SortType::Descending,
+                            KafkaFetch::Oldest => gtk::SortType::Ascending,
+                        },
+                    };
+                    info!(
+                        "sort_column::{:?}, sort_type::{:?}",
+                        sort_column.map(|c| c.title()),
+                        sort_type
+                    );
+                    widgets.messages_view.sort_by_column(sort_column, sort_type);
                 };
 
-                info!("sort_column::{:?}, sort_type::{:?}", sort_column, sort_type);
-                widgets.messages_view.sort_by_column(sort_column, sort_type);
                 self.messages_wrapper.extend_from_iter(
                     response
                         .messages
@@ -1057,7 +1001,9 @@ impl FactoryComponent for MessagesTabModel {
         sender: FactorySender<Self>,
     ) {
         match message {
-            CommandMsg::Data(messages) => sender.input(MessagesTabMsg::UpdateMessages(messages)),
+            CommandMsg::Data(messages) => {
+                sender.input(MessagesTabMsg::UpdateMessages(Box::new(messages)))
+            }
             CommandMsg::CopyToClipboard(id, data) => {
                 let data_size = format_size(data.len(), DECIMAL);
                 info!("setting text to clipboard: {}", data_size);
@@ -1095,48 +1041,20 @@ fn on_loading(widgets: &mut MessagesTabModelWidgets, enabled: bool) {
     widgets.max_messages.set_sensitive(enabled);
 }
 
-fn fill_pagination(
-    page_op: PageOp,
-    widgets: &mut MessagesTabModelWidgets,
-    total: usize,
-    page_size: u16,
-    first: Option<&KrustMessage>,
-    last: Option<&KrustMessage>,
-) {
+fn fill_pagination(widgets: &mut MessagesTabModelWidgets, total: usize, page_size: u16) {
     let current_page: usize = widgets
         .pag_current_entry
         .text()
         .to_string()
         .parse::<usize>()
         .unwrap_or_default();
-    let current_page = match page_op {
-        PageOp::Next => current_page + 1,
-        PageOp::Prev => current_page - 1,
-    };
+
     widgets.pag_total_entry.set_text(total.to_string().as_str());
     widgets
         .pag_current_entry
         .set_text(current_page.to_string().as_str());
     let pages = ((total as f64) / (page_size as f64)).ceil() as usize;
     widgets.pag_last_entry.set_text(pages.to_string().as_str());
-    if let (Some(first), Some(last)) = (first, last) {
-        let first_offset = first.offset;
-        let first_partition = first.partition;
-        let last_offset = last.offset;
-        let last_partition = last.partition;
-        widgets
-            .first_offset
-            .set_text(first_offset.to_string().as_str());
-        widgets
-            .first_partition
-            .set_text(first_partition.to_string().as_str());
-        widgets
-            .last_offset
-            .set_text(last_offset.to_string().as_str());
-        widgets
-            .last_partition
-            .set_text(last_partition.to_string().as_str());
-    }
 
     info!(
         "fill pagination of current page {} of {}",

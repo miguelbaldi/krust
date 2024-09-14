@@ -505,7 +505,7 @@ impl Component for AppModel {
             }
             AppMsg::ShowMessagesPage(connection, topic) => {
                 self.messages_page
-                    .emit(MessagesPageMsg::Open(connection, topic));
+                    .emit(MessagesPageMsg::Open(Box::new(connection), Box::new(topic)));
                 widgets.main_stack.set_visible_child_name("Messages");
             }
             AppMsg::SavedSettings => {

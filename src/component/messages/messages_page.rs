@@ -25,7 +25,7 @@ pub struct MessagesPageModel {
 
 #[derive(Debug)]
 pub enum MessagesPageMsg {
-    Open(KrustConnection, KrustTopic),
+    Open(Box<KrustConnection>, Box<KrustTopic>),
     PageAdded(TabPage, i32),
     MenuPageClosed,
     MenuPagePin,
@@ -151,10 +151,10 @@ impl Component for MessagesPageModel {
                         info!("adding new page");
                         let conn_id = &connection.id.unwrap();
                         let topic_name = &topic.name.clone();
-                        self.connection = Some(connection);
+                        self.connection = Some(*connection);
                         let mut repo = Repository::new();
                         let maybe_topic = repo.find_topic(*conn_id, topic_name);
-                        self.topic = maybe_topic.clone().or(Some(topic));
+                        self.topic = maybe_topic.clone().or(Some(*topic));
                         let init = MessagesTabInit {
                             topic: self.topic.clone().unwrap(),
                             connection: self.connection.clone().unwrap(),

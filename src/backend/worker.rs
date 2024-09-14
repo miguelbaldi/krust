@@ -10,7 +10,9 @@ use crate::{
 
 use super::{
     kafka::{KafkaBackend, KafkaFetch},
-    repository::{KrustConnection, KrustMessage, KrustTopic, MessagesRepository},
+    repository::{
+        KrustConnection, KrustMessage, KrustTopic, MessagesRepository, MessagesSearchOrder,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, strum::EnumString, strum::Display)]
@@ -22,21 +24,15 @@ pub enum MessagesMode {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, strum::EnumString, strum::Display)]
-pub enum PageOp {
-    Next,
-    Prev,
-}
-
 #[derive(Debug, Clone)]
 pub struct MessagesRequest {
     pub task: Option<Task>,
     pub mode: MessagesMode,
     pub connection: KrustConnection,
     pub topic: KrustTopic,
-    pub page_operation: PageOp,
     pub page_size: u16,
-    pub offset_partition: (usize, usize),
+    pub page: usize,
+    pub search_order: Option<MessagesSearchOrder>,
     pub search: Option<String>,
     pub fetch: KafkaFetch,
     pub max_messages: i64,
@@ -45,7 +41,6 @@ pub struct MessagesRequest {
 #[derive(Debug, Clone)]
 pub struct MessagesResponse {
     pub task: Option<Task>,
-    pub page_operation: PageOp,
     pub page_size: u16,
     pub total: usize,
     pub messages: Vec<KrustMessage>,
@@ -134,7 +129,13 @@ impl MessagesWorker {
                     info!("request with task {:?} cancelled", &req.task);
                     TASK_MANAGER_BROKER.send(TaskManagerMsg::RemoveTask(task.unwrap()));
                     // The token was cancelled
-                    Ok(MessagesResponse { task: req.task, total: 0, messages: Vec::new(), topic: Some(req.topic), page_operation: req.page_operation, page_size: req.page_size, search: req.search})
+                    Ok(MessagesResponse {
+                        task: req.task,
+                        total: 0,
+                        messages: Vec::new(),
+                        topic: Some(req.topic),
+                        page_size: req.page_size,
+                        search: req.search})
                 }
                 messages = self.get_messages_by_mode(&req) => {
                     messages
@@ -219,17 +220,19 @@ impl MessagesWorker {
                 let total = mtopic.total.unwrap_or_default();
 
                 mrepo.init().unwrap();
-                kafka
-                    .cache_messages_for_topic(
-                        task.clone(),
-                        topic_name,
-                        total,
-                        &mrepo,
-                        Some(mtopic.partitions),
-                        Some(KafkaFetch::Oldest),
-                    )
-                    .await
-                    .unwrap();
+                if total > 0 {
+                    kafka
+                        .cache_messages_for_topic(
+                            task.clone(),
+                            topic_name,
+                            total,
+                            &mrepo,
+                            Some(mtopic.partitions),
+                            Some(KafkaFetch::Oldest),
+                        )
+                        .await
+                        .unwrap();
+                }
                 if request.search.clone().is_some() {
                     mrepo
                         .count_messages(request.search.clone())
@@ -239,40 +242,21 @@ impl MessagesWorker {
                 }
             }
         };
-        let messages = match request.page_operation {
-            PageOp::Next => match request.offset_partition {
-                (0, 0) => mrepo
-                    .find_messages(
-                        task.clone(),
-                        request.clone().page_size,
-                        request.clone().search,
-                    )
-                    .unwrap(),
-                offset_partition => mrepo
-                    .find_next_messages(
-                        task.clone(),
-                        request.page_size,
-                        offset_partition,
-                        request.clone().search,
-                    )
-                    .unwrap(),
-            },
-            PageOp::Prev => mrepo
-                .find_prev_messages(
-                    task.clone(),
-                    request.page_size,
-                    request.offset_partition,
-                    request.clone().search,
-                )
-                .unwrap(),
-        };
+        let messages = mrepo
+            .find_messages_paged(
+                task.clone(),
+                request.page,
+                request.page_size,
+                request.search_order.clone(),
+                request.search.clone(),
+            )
+            .unwrap();
         TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), 1.0));
         Ok(MessagesResponse {
             task: Some(task),
             total,
             messages,
             topic: Some(topic),
-            page_operation: request.page_operation,
             page_size: request.page_size,
             search: request.search.clone(),
         })
@@ -295,13 +279,14 @@ impl MessagesWorker {
                 Some(request.max_messages),
             )
             .await?;
-
+        if messages.is_empty() {
+            TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), 1.0));
+        }
         Ok(MessagesResponse {
             task: Some(task),
             total: messages.len(),
             messages,
             topic: Some(request.topic.clone()),
-            page_operation: request.page_operation,
             page_size: request.page_size,
             search: request.search.clone(),
         })

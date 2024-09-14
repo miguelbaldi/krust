@@ -88,6 +88,11 @@ pub struct MessagesRepository {
     path: PathBuf,
     database_name: String,
 }
+#[derive(Debug, Clone)]
+pub struct MessagesSearchOrder {
+    pub column: String,
+    pub order: String,
+}
 
 impl MessagesRepository {
     pub fn new(connection_id: usize, topic_name: &String) -> Self {
@@ -119,7 +124,8 @@ impl MessagesRepository {
     }
     pub fn init(&mut self) -> Result<(), ExternalError> {
         let result = self.get_init_connection().execute_batch(
-            "CREATE TABLE IF NOT EXISTS kr_message (partition INTEGER, offset INTEGER, key TEXT, value TEXT, timestamp INTEGER, headers TEXT, PRIMARY KEY (partition, offset));"
+            "CREATE TABLE IF NOT EXISTS kr_message
+            (partition INTEGER, offset INTEGER, key TEXT, value TEXT, timestamp INTEGER, headers TEXT, PRIMARY KEY (partition, offset));"
         ).map_err(ExternalError::DatabaseError);
         let _ = self
             .get_init_connection()
@@ -208,158 +214,41 @@ impl MessagesRepository {
         }
         Ok(messages)
     }
-
-    pub fn find_messages(
-        &mut self,
-        task: Task,
-        page_size: u16,
-        search: Option<String>,
-    ) -> Result<Vec<KrustMessage>, ExternalError> {
-        let conn = self.get_connection();
-        let mut stmt_query = match search {
-            Some(_) => conn.prepare_cached(
-                "SELECT partition, offset, key, value, timestamp, headers
-                FROM kr_message
-                WHERE value LIKE :search
-                ORDER BY offset, partition
-                LIMIT :ps",
-            )?,
-            None => conn.prepare_cached(
-                "SELECT partition, offset, key, value, timestamp, headers
-                FROM kr_message
-                ORDER BY offset, partition
-                LIMIT :ps",
-            )?,
-        };
-        let string_to_headers = move |sheaders: String| {
-            let headers: Result<Vec<KrustHeader>, rusqlite::Error> = ron::from_str(&sheaders)
-                .map_err(|e| rusqlite::Error::InvalidColumnName(e.to_string()));
-            headers
-        };
-        let topic_name = self.topic_name.clone();
-        let row_to_model = move |row: &Row<'_>| {
-            Ok(KrustMessage {
-                partition: row.get(0)?,
-                offset: row.get(1)?,
-                key: row.get(2)?,
-                value: row.get(3)?,
-                timestamp: Some(row.get(4)?),
-                headers: string_to_headers(row.get(5)?)?,
-                topic: topic_name.clone(),
-            })
-        };
-        let params_with_search = named_params! { ":search": format!("%{}%", search.clone().unwrap_or_default()), ":ps": page_size };
-        let params = named_params! { ":ps": page_size, };
-        let rows = stmt_query
-            .query_map(
-                if search.is_some() {
-                    params_with_search
-                } else {
-                    params
-                },
-                row_to_model,
-            )
-            .map_err(ExternalError::DatabaseError)?;
-        let mut messages = Vec::new();
-        for row in rows {
-            messages.push(row?);
-            let progress_step = ((messages.len() as f64) * 1.0) / ((page_size as f64) * 1.0);
-            TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), progress_step));
-        }
-        Ok(messages)
+    fn get_pagination_from(&self, page: usize, page_size: u16) -> usize {
+        (page * page_size as usize) - page_size as usize
     }
-
-    pub fn find_next_messages(
-        &mut self,
-        task: Task,
-        page_size: u16,
-        last: (usize, usize),
-        search: Option<String>,
-    ) -> Result<Vec<KrustMessage>, ExternalError> {
-        let (offset, partition) = last;
-        let conn = self.get_connection();
-        let mut stmt_query = match search {
-            Some(_) => conn.prepare_cached(
-                "SELECT partition, offset, key, value, timestamp, headers
-                FROM kr_message
-                WHERE (offset, partition) > (:o, :p)
-                AND value LIKE :search
-                ORDER BY offset, partition
-                LIMIT :ps",
-            )?,
-            None => conn.prepare_cached(
-                "SELECT partition, offset, key, value, timestamp, headers
-                FROM kr_message
-                WHERE (offset, partition) > (:o, :p)
-                ORDER BY offset, partition
-                LIMIT :ps",
-            )?,
-        };
-        let string_to_headers = move |sheaders: String| {
-            let headers: Result<Vec<KrustHeader>, rusqlite::Error> = ron::from_str(&sheaders)
-                .map_err(|e| rusqlite::Error::InvalidColumnName(e.to_string()));
-            headers
-        };
-        let topic_name = self.topic_name.clone();
-        let row_to_model = move |row: &Row<'_>| {
-            Ok(KrustMessage {
-                partition: row.get(0)?,
-                offset: row.get(1)?,
-                key: row.get(2)?,
-                value: row.get(3)?,
-                timestamp: Some(row.get(4)?),
-                headers: string_to_headers(row.get(5)?)?,
-                topic: topic_name.clone(),
-            })
-        };
-        let params_with_search = named_params! {":ps": page_size, ":o": offset, ":p": partition, ":search": format!("%{}%", search.clone().unwrap_or_default())};
-        let params = named_params! {":ps": page_size, ":o": offset, ":p": partition,};
-        let rows = stmt_query
-            .query_map(
-                if search.is_some() {
-                    params_with_search
-                } else {
-                    params
-                },
-                row_to_model,
-            )
-            .map_err(ExternalError::DatabaseError)?;
-        let mut messages = Vec::new();
-        for row in rows {
-            messages.push(row?);
-            let progress_step = ((messages.len() as f64) * 1.0) / ((page_size as f64) * 1.0);
-            TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), progress_step));
-        }
-        Ok(messages)
+    fn get_pagination_to(&self, page: usize, page_size: u16) -> usize {
+        self.get_pagination_from(page, page_size) + page_size as usize
     }
-    pub fn find_prev_messages(
+    pub fn find_messages_paged(
         &mut self,
         task: Task,
+        page: usize,
         page_size: u16,
-        first: (usize, usize),
+        order: Option<MessagesSearchOrder>,
         search: Option<String>,
     ) -> Result<Vec<KrustMessage>, ExternalError> {
-        let (offset, partition) = first;
         let conn = self.get_connection();
+        let order = order
+            .map(|o| format!("{} {}", o.column, o.order))
+            .unwrap_or("timestamp DESC".to_string());
+        let from = self.get_pagination_from(page, page_size);
+        let to = self.get_pagination_to(page, page_size);
         let mut stmt_query = match search {
             Some(_) => conn.prepare_cached(
+                format!(
                 "SELECT partition, offset, key, value, timestamp, headers FROM (
-                    SELECT partition, offset, key, value, timestamp, headers
+                    SELECT ROW_NUMBER () OVER (ORDER BY {}) rownum, partition, offset, key, value, timestamp, headers
                     FROM kr_message
-                    WHERE (offset, partition) < (:o, :p)
-                    AND value LIKE :search
-                    ORDER BY offset DESC, partition DESC
-                    LIMIT :ps
-                ) ORDER BY offset ASC, partition ASC",
+                    WHERE value LIKE :search)
+                WHERE rownum > {} AND rownum <= {}", order, from, to).as_str(),
             )?,
             None => conn.prepare_cached(
+                format!(
                 "SELECT partition, offset, key, value, timestamp, headers FROM (
-                    SELECT partition, offset, key, value, timestamp, headers
-                    FROM kr_message
-                    WHERE (offset, partition) < (:o, :p)
-                    ORDER BY offset DESC, partition DESC
-                    LIMIT :ps
-                ) ORDER BY offset ASC, partition ASC",
+                    SELECT ROW_NUMBER () OVER (ORDER BY {}) rownum, partition, offset, key, value, timestamp, headers
+                    FROM kr_message)
+                WHERE rownum > {} AND rownum <= {}", order, from, to).as_str(),
             )?,
         };
         let string_to_headers = move |sheaders: String| {
@@ -379,8 +268,9 @@ impl MessagesRepository {
                 topic: topic_name.clone(),
             })
         };
-        let params_with_search = named_params! {":ps": page_size, ":o": offset, ":p": partition, ":search": format!("%{}%", search.clone().unwrap_or_default()) };
-        let params = named_params! {":ps": page_size, ":o": offset, ":p": partition };
+        let params_with_search =
+            named_params! { ":search": format!("%{}%", search.clone().unwrap_or_default()) };
+        let params = named_params! {};
         let rows = stmt_query
             .query_map(
                 if search.is_some() {
