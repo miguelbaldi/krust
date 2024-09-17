@@ -34,6 +34,7 @@ pub enum TopicsPageMsg {
 #[derive(Debug)]
 pub enum TopicsPageOutput {
     OpenMessagesPage(KrustConnection, KrustTopic),
+    HandleError(KrustConnection, bool),
 }
 
 #[relm4::component(pub)]
@@ -55,19 +56,19 @@ impl Component for TopicsPageModel {
     view! {
         #[root]
         adw::TabOverview {
-            set_view: Some(&topics_viewer),
+            set_view: Some(topics_viewer),
             #[wrap(Some)]
             set_child = &gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
                 append: topics_tabs = &adw::TabBar {
                     set_autohide: false,
                     set_expand_tabs: true,
-                    set_view: Some(&topics_viewer),
+                    set_view: Some(topics_viewer),
                     #[wrap(Some)]
                     set_end_action_widget = &gtk::Box {
                         set_orientation: gtk::Orientation::Horizontal,
                         adw::TabButton {
-                            set_view: Some(&topics_viewer),
+                            set_view: Some(topics_viewer),
                             set_action_name: Some("overview.open"),
                         },
                     },
@@ -91,6 +92,10 @@ impl Component for TopicsPageModel {
             .forward(sender.output_sender(), |msg| match msg {
                 TopicsTabOutput::OpenMessagesPage(conn, topic) => {
                     TopicsPageOutput::OpenMessagesPage(conn, topic)
+                }
+                TopicsTabOutput::HandleError(conn, disconnect) => {
+                    info!("[topics_page] Handle error: {} - {}", conn.name, disconnect);
+                    TopicsPageOutput::HandleError(conn, disconnect)
                 }
             });
 
@@ -123,7 +128,7 @@ impl Component for TopicsPageModel {
 
         let model = TopicsPageModel {
             current,
-            topics: topics,
+            topics,
             is_loading: false,
             search_text: String::default(),
         };
@@ -146,8 +151,8 @@ impl Component for TopicsPageModel {
                 let mut has_page: Option<(usize, TabPage)> = None;
                 for i in 0..widgets.topics_viewer.n_pages() {
                     let tab = widgets.topics_viewer.nth_page(i);
-                    let title = format!("{}", connection.name);
-                    if title == tab.title().to_string() {
+                    let title = connection.name.clone();
+                    if title == tab.title() {
                         has_page = Some((i as usize, tab.clone()));
                         break;
                     }
@@ -173,7 +178,7 @@ impl Component for TopicsPageModel {
             }
             TopicsPageMsg::PageAdded(page, index) => {
                 let tab_model = self.topics.get(index.try_into().unwrap()).unwrap();
-                let title = format!("{}", tab_model.current.clone().unwrap().name,);
+                let title = tab_model.current.clone().unwrap().name;
                 page.set_title(title.as_str());
                 page.set_live_thumbnail(true);
 
@@ -195,7 +200,7 @@ impl Component for TopicsPageModel {
                     for i in 0..topics.len() {
                         let tp = topics.get_mut(i);
                         if let Some(tp) = tp {
-                            let title = format!("{}", tp.current.clone().unwrap().name.clone(),);
+                            let title = tp.current.clone().unwrap().name.clone();
                             info!("PageClosed [{}][{}={}]", i, title, page.title());
                             if title.eq(&page.title().to_string()) {
                                 idx = Some(i);
@@ -204,7 +209,7 @@ impl Component for TopicsPageModel {
                         }
                     }
                     if let Some(idx) = idx {
-                        let result = topics.remove(idx.try_into().unwrap());
+                        let result = topics.remove(idx);
                         info!(
                             "page model with index {} and name {:?} removed",
                             idx, result

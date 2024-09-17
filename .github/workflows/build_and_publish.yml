@@ -10,37 +10,37 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: Fix tag reference (workaround for https://github.com/actions/checkout/issues/290)
-      run: git fetch --update-head-ok -f origin ${{ github.ref }}:${{ github.ref }}
-    - name: Build
-      run: docker-compose up
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v3
-      with:
-        name: executables
-        if-no-files-found: error
-        path: |
-          target/appimage/*.AppImage
+      - uses: actions/checkout@v4
+      - name: Fix tag reference (workaround for https://github.com/actions/checkout/issues/290)
+        run: git fetch --update-head-ok -f origin ${{ github.ref }}:${{ github.ref }}
+      - name: Build
+        run: docker compose up
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: executables-linux
+          if-no-files-found: error
+          path: |
+            target/appimage/*.AppImage
   build-windows:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: Fix tag reference (workaround for https://github.com/actions/checkout/issues/290)
-      run: git fetch --update-head-ok -f origin ${{ github.ref }}:${{ github.ref }}
-    - name: Build (Windows)
-      run: docker-compose -f docker-compose.windows.yml up
-    - name: Make Windows Installer
-      run: ./create_windows_installer.sh
-    - name: Zip Portable Windows Artifact
-      run: zip -r windows-portable.zip package
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v3
-      with:
-        name: executables
-        path: |
-          *.zip
-          *.exe
+      - uses: actions/checkout@v4
+      - name: Fix tag reference (workaround for https://github.com/actions/checkout/issues/290)
+        run: git fetch --update-head-ok -f origin ${{ github.ref }}:${{ github.ref }}
+      - name: Build (Windows)
+        run: docker compose -f docker-compose.windows.yml up
+      - name: Make Windows Installer
+        run: ./create_windows_installer.sh
+      - name: Zip Portable Windows Artifact
+        run: zip -r windows-portable.zip package
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: executables-windows
+          path: |
+            *.zip
+            *.exe
 
   publish:
     permissions:
@@ -49,13 +49,20 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-    - uses: actions/download-artifact@v2
-    - uses: softprops/action-gh-release@v2
-      if: startsWith(github.ref, 'refs/tags/')
-      with:
-        prerelease: false
-        generate_release_notes: true
-        files: |
-          **/*.AppImage
-          **/*.zip
-          **/*.exe
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: executables-*
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          prerelease: false
+          draft: false
+          generate_release_notes: true
+          append_body: true
+          files: |
+            **/*.AppImage
+            **/*.zip
+            **/*.exe
+      - run: ls -R .

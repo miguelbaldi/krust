@@ -8,16 +8,17 @@ use relm4::{
     abstractions::Toaster,
     actions::{RelmAction, RelmActionGroup},
     factory::FactoryVecDeque,
-    main_adw_application,
+    main_adw_application, main_application,
     prelude::*,
     MessageBroker,
 };
 use relm4_components::alert::{Alert, AlertMsg, AlertResponse, AlertSettings};
-use tracing::{error, info, warn};
+use tracing::*;
 
 use crate::{
     backend::repository::{KrustConnection, KrustTopic, Repository},
     component::{
+        cache_manager_dialog::{CacheManagerDialogInit, CacheManagerDialogModel},
         connection_list::{KrustConnectionMsg, KrustConnectionOutput},
         connection_page::{ConnectionPageModel, ConnectionPageMsg, ConnectionPageOutput},
         settings_dialog::{SettingsDialogInit, SettingsDialogMsg},
@@ -31,6 +32,7 @@ use crate::{
 };
 
 use super::{
+    cache_manager_dialog::CacheManagerDialogMsg,
     connection_list::ConnectionListModel,
     messages::messages_page::{MessagesPageModel, MessagesPageMsg},
     settings_dialog::SettingsDialogModel,
@@ -49,8 +51,10 @@ pub enum AppMsg {
     ShowTopicsPage(KrustConnection),
     ShowTopicsPageByIndex(i32),
     ShowMessagesPage(KrustConnection, KrustTopic),
+    HandleTopicsError(KrustConnection, bool),
     RemoveConnection(DynamicIndex, KrustConnection),
     ShowSettings,
+    ShowCacheManager,
     SavedSettings,
     ShowToast(String, String),
     HideToast(String),
@@ -73,6 +77,7 @@ pub struct AppModel {
     topics_page: Controller<TopicsPageModel>,
     messages_page: Controller<MessagesPageModel>,
     settings_dialog: Controller<SettingsDialogModel>,
+    cache_manager_dialog: Controller<CacheManagerDialogModel>,
 }
 
 relm4::new_action_group!(pub(super) WindowActionGroup, "win");
@@ -80,6 +85,7 @@ relm4::new_stateless_action!(pub(super) EditSettings, WindowActionGroup, "edit-s
 relm4::new_stateless_action!(pub(super) AddConnection, WindowActionGroup, "add-connection");
 relm4::new_stateless_action!(pub(super) ShortcutsAction, WindowActionGroup, "show-help-overlay");
 relm4::new_stateless_action!(AboutAction, WindowActionGroup, "about");
+relm4::new_stateless_action!(pub(super) CacheManagerAction, WindowActionGroup, "cache-manager");
 
 pub static TOASTER_BROKER: MessageBroker<AppMsg> = MessageBroker::new();
 
@@ -95,6 +101,7 @@ impl Component for AppModel {
             section! {
                 "_Settings" => EditSettings,
                 "_Add connection" => AddConnection,
+                "_Cache manager" => CacheManagerAction,
                 "_Keyboard" => ShortcutsAction,
                 "_About" => AboutAction,
             }
@@ -266,6 +273,9 @@ impl Component for AppModel {
                 TopicsPageOutput::OpenMessagesPage(connection, topic) => {
                     AppMsg::ShowMessagesPage(connection, topic)
                 }
+                TopicsPageOutput::HandleError(conn, disconnect) => {
+                    AppMsg::HandleTopicsError(conn, disconnect)
+                }
             });
 
         let messages_page: Controller<MessagesPageModel> = MessagesPageModel::builder()
@@ -276,6 +286,11 @@ impl Component for AppModel {
         let settings_dialog: Controller<SettingsDialogModel> = SettingsDialogModel::builder()
             .launch(SettingsDialogInit {})
             .detach();
+
+        let cache_manager_dialog: Controller<CacheManagerDialogModel> =
+            CacheManagerDialogModel::builder()
+                .launch(CacheManagerDialogInit {})
+                .detach();
 
         let state = State::read().unwrap_or_default();
         info!("starting with application state: {:?}", &state);
@@ -301,10 +316,16 @@ impl Component for AppModel {
         let about_action = RelmAction::<AboutAction>::new_stateless(move |_| {
             about_sender.send(()).unwrap();
         });
+
+        let cm_sender = sender.clone();
+        let cache_manager_action = RelmAction::<CacheManagerAction>::new_stateless(move |_| {
+            cm_sender.input(AppMsg::ShowCacheManager);
+        });
         info!("adding actions to main windows");
         actions.add_action(edit_settings_action);
         actions.add_action(add_connection_action);
         actions.add_action(about_action);
+        actions.add_action(cache_manager_action);
         actions.register_for_widget(&widgets.main_window);
 
         info!("listing all connections");
@@ -319,7 +340,7 @@ impl Component for AppModel {
             Err(e) => error!("error loading connections: {:?}", e),
         }
         let model = AppModel {
-            toaster: toaster,
+            toaster,
             toasts: HashMap::new(),
             _status_bar: status_bar,
             _task_manager: task_manager,
@@ -342,8 +363,44 @@ impl Component for AppModel {
             topics_page,
             messages_page,
             settings_dialog,
+            cache_manager_dialog,
         };
         widgets.load_window_size();
+        // DEBUG: start
+        let main_window = main_application().active_window().unwrap();
+        let surface = main_window.surface();
+        if let Some(surface) = surface {
+            let toplevel = surface.downcast::<gtk::gdk::Toplevel>();
+            if let Ok(toplevel) = toplevel {
+                info!("TOPLEVEL::{:?}", toplevel);
+                toplevel.connect_layout(|_surface, _width, _height| {
+                    //trace!("TOPLEVEL::LAYOUT::[width={},height={}]", width, height);
+                });
+                toplevel.connect_enter_monitor(|_surface, monitor| {
+                    //trace!("TOPLEVEL::ENTER_MONITOR::[monitor={:?}]", monitor);
+                    if let Some(_description) = monitor.description() {
+                        //trace!("TOPLEVEL::ENTER_MONITOR::[description={}]", description.to_string());
+                    }
+                    if let Some(_connector) = monitor.connector() {
+                        //trace!("TOPLEVEL::ENTER_MONITOR::[connector={}]", connector.to_string());
+                    }
+                });
+                toplevel.connect_leave_monitor(|_surface, monitor| {
+                    //trace!("TOPLEVEL::LEAVE_MONITOR::[monitor={:?}]", monitor);
+                    if let Some(_description) = monitor.description() {
+                        //trace!("TOPLEVEL::LEAVE_MONITOR::[description={}]", description.to_string());
+                    }
+                    if let Some(_connector) = monitor.connector() {
+                        // trace!("TOPLEVEL::LEAVE_MONITOR::[connector={}]", connector.to_string());
+                    }
+                });
+                // toplevel.connect_compute_size(|tl, cs| {
+                //     let bounds = cs.bounds();
+                //     info!("TOPLEVEL::BOUNDS::{:?}", bounds);
+                // });
+            }
+        };
+        // DEBUG: end
         ComponentParts { model, widgets }
     }
 
@@ -356,20 +413,18 @@ impl Component for AppModel {
     ) {
         match msg {
             AppMsg::ShowToast(id, text) => {
-                let toast = adw::Toast::builder().title(&text).timeout(0).build();
+                let toast = adw::Toast::builder().title(text).timeout(0).build();
                 self.toasts.insert(id, toast.clone());
                 self.toaster.add_toast(toast);
             }
             AppMsg::HideToast(id) => {
                 info!("hide_toast::{}", &id);
                 let command_sender = sender.command_sender().clone();
-                gtk::glib::timeout_add_once(Duration::from_secs(2), move || {
+                gtk::glib::timeout_add_once(Duration::from_secs(1), move || {
                     command_sender.emit(AppCommand::LateHide(id));
                 });
             }
-            AppMsg::CloseIgnore => {
-                ();
-            }
+            AppMsg::CloseIgnore => (),
             AppMsg::CloseRequest => {
                 self.close_dialog.emit(AlertMsg::Show);
             }
@@ -381,6 +436,9 @@ impl Component for AppModel {
                 self.connection_page.emit(ConnectionPageMsg::New);
                 self.connection_page.widget().set_visible(true);
                 //widgets.main_stack.set_visible_child_name("Connection");
+            }
+            AppMsg::ShowCacheManager => {
+                self.cache_manager_dialog.emit(CacheManagerDialogMsg::Show);
             }
             AppMsg::AddConnection(conn) => {
                 info!("|-->Adding connection ");
@@ -407,6 +465,7 @@ impl Component for AppModel {
                                 conn_to_update.sasl_username = new_conn.sasl_username;
                                 conn_to_update.sasl_password = new_conn.sasl_password;
                                 conn_to_update.color = new_conn.color;
+                                conn_to_update.timeout = new_conn.timeout;
                             }
                             None => warn!("no connection to update"),
                         };
@@ -467,7 +526,7 @@ impl Component for AppModel {
             }
             AppMsg::ShowMessagesPage(connection, topic) => {
                 self.messages_page
-                    .emit(MessagesPageMsg::Open(connection, topic));
+                    .emit(MessagesPageMsg::Open(Box::new(connection), Box::new(topic)));
                 widgets.main_stack.set_visible_child_name("Messages");
             }
             AppMsg::SavedSettings => {
@@ -476,6 +535,19 @@ impl Component for AppModel {
             AppMsg::ShowSettings => {
                 info!("|-->Showing settings dialog");
                 self.settings_dialog.emit(SettingsDialogMsg::Show);
+            }
+            AppMsg::HandleTopicsError(conn, disconnect) => {
+                self.topics_page.emit(TopicsPageMsg::MenuPageClosed);
+                if disconnect {
+                    for c in self.connections.guard().iter_mut() {
+                        info!("Looking for connections::{}={:?}", conn.name, c);
+                        if c.name == conn.name {
+                            c.is_connected = false;
+                            break;
+                        }
+                    }
+                    self.connections.broadcast(KrustConnectionMsg::Refresh);
+                };
             }
         }
         self.update_view(widgets, sender);
@@ -495,7 +567,7 @@ impl Component for AppModel {
                     toast.dismiss();
                 }
             }
-         }
+        }
     }
 
     fn shutdown(&mut self, widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {

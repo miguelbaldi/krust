@@ -1,12 +1,13 @@
-use gtk::prelude::*;
+use adw::{prelude::*, AlertDialog};
 use relm4::{
     factory::{DynamicIndex, FactoryComponent},
-    FactorySender,
+    main_application, FactorySender,
 };
 use tracing::info;
 
 use crate::{
     backend::repository::{KrustConnection, KrustConnectionSecurityType},
+    modals::utils::build_confirmation_alert,
     Repository,
 };
 
@@ -15,7 +16,7 @@ pub enum KrustConnectionMsg {
     Connect,
     Disconnect,
     Edit(DynamicIndex),
-    Remove(DynamicIndex),
+    Remove,
     Refresh,
 }
 
@@ -37,7 +38,10 @@ pub struct ConnectionListModel {
     pub sasl_username: Option<String>,
     pub sasl_password: Option<String>,
     pub color: Option<String>,
+    pub timeout: Option<usize>,
     pub is_connected: bool,
+    pub confirm_delete_alert: AlertDialog,
+    pub selected: Option<DynamicIndex>,
 }
 
 impl From<&mut ConnectionListModel> for KrustConnection {
@@ -51,6 +55,7 @@ impl From<&mut ConnectionListModel> for KrustConnection {
             sasl_username: value.sasl_username.clone(),
             sasl_password: value.sasl_password.clone(),
             color: value.color.clone(),
+            timeout: value.timeout,
         }
     }
 }
@@ -92,8 +97,8 @@ impl FactoryComponent for ConnectionListModel {
                 set_tooltip_text: Some("Delete connection"),
                 set_icon_name: "edit-delete-symbolic",
                 add_css_class: "circular",
-                connect_clicked[sender, index] => move |_| {
-                    sender.input(KrustConnectionMsg::Remove(index.clone()));
+                connect_clicked[sender] => move |_| {
+                    sender.input(KrustConnectionMsg::Remove);
                 },
             },
             #[name(label)]
@@ -106,7 +111,22 @@ impl FactoryComponent for ConnectionListModel {
         }
     }
 
-    fn init_model(conn: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
+    fn init_model(conn: Self::Init, index: &DynamicIndex, sender: FactorySender<Self>) -> Self {
+        let confirm_delete_alert = build_confirmation_alert(
+            "Delete".to_string(),
+            "Are you sure you want to delete the connection?".to_string(),
+        );
+        let snd = sender.clone();
+        let index = index.clone();
+        let connection = conn.clone();
+        confirm_delete_alert.connect_response(Some("confirm"), move |_, _| {
+            snd.output(KrustConnectionOutput::Remove(
+                index.clone(),
+                connection.clone(),
+            ))
+            .unwrap();
+            //snd.input(KrustConnectionMsg::ConfirmRemove);
+        });
         Self {
             id: conn.id,
             name: conn.name,
@@ -116,7 +136,10 @@ impl FactoryComponent for ConnectionListModel {
             sasl_username: conn.sasl_username,
             sasl_password: conn.sasl_password,
             color: conn.color,
+            timeout: conn.timeout,
             is_connected: false,
+            confirm_delete_alert,
+            selected: None,
         }
     }
     fn post_view(&self, widgets: &mut Self::Widgets) {}
@@ -158,6 +181,7 @@ impl FactoryComponent for ConnectionListModel {
                 info!("Disconnect request for {}", self.name);
                 let css_class = format!("custom_color_{}", self.id.unwrap());
                 widgets.connect_button.remove_css_class(&css_class);
+                widgets.connect_button.set_active(false);
                 self.is_connected = false;
             }
             KrustConnectionMsg::Edit(index) => {
@@ -166,11 +190,10 @@ impl FactoryComponent for ConnectionListModel {
                     .output(KrustConnectionOutput::Edit(index, self.into()))
                     .unwrap();
             }
-            KrustConnectionMsg::Remove(index) => {
-                info!("Edit request for {}", self.name);
-                sender
-                    .output(KrustConnectionOutput::Remove(index, self.into()))
-                    .unwrap();
+            KrustConnectionMsg::Remove => {
+                info!("Delete request for {}", self.name);
+                let main_window = main_application().active_window().unwrap();
+                self.confirm_delete_alert.present(&main_window);
             }
             KrustConnectionMsg::Refresh => {
                 widgets.label.set_label(&self.name);
@@ -193,6 +216,8 @@ impl FactoryComponent for ConnectionListModel {
                     );
                     widgets.connect_button.remove_css_class(&css_class);
                     widgets.connect_button.add_css_class(&css_class);
+                } else {
+                    sender.input_sender().emit(KrustConnectionMsg::Disconnect);
                 };
             }
         }

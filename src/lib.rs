@@ -7,16 +7,17 @@
 #![warn(clippy::print_stdout)]
 #![warn(clippy::todo)]
 
+mod backend;
 mod component;
 pub mod config;
 mod modals;
-mod backend;
 
+pub use backend::repository::Repository;
+pub use backend::settings::Settings;
 pub use component::app::AppModel;
 pub use component::app::AppMsg;
-pub use backend::repository::Repository;
-pub use component::messages::messages_tab::MessagesSearchAction;
 pub use component::app::TOASTER_BROKER;
+pub use component::messages::messages_tab::MessagesSearchAction;
 
 pub const KRUST_QUALIFIER: &str = "io";
 pub const KRUST_ORGANIZATION: &str = "miguelbaldi";

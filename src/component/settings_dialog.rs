@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use adw::prelude::*;
+use gtk::Adjustment;
 use relm4::{gtk, Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use relm4_components::{
     open_dialog::{OpenDialog, OpenDialogMsg, OpenDialogResponse, OpenDialogSettings},
@@ -11,7 +12,7 @@ use tracing::*;
 
 use crate::backend::settings::Settings;
 
-const MESSAGE_COLUMNS: [&str;4] = ["Offset", "Partition", "Key", "Date/time (Timestamp)"];
+const MESSAGE_COLUMNS: [&str; 4] = ["Offset", "Partition", "Key", "Date/time (Timestamp)"];
 
 #[derive(Clone, Debug, Display, EnumString, Default)]
 pub enum MessagesSortOrder {
@@ -33,6 +34,8 @@ pub struct SettingsDialogModel {
     messages_sort_column_order_combo: Controller<SimpleComboRow<MessagesSortOrder>>,
     messages_sort_column: String,
     messages_sort_column_order: String,
+    threads_number: f64,
+    default_connection_timeout: f64,
 }
 
 #[derive(Debug)]
@@ -42,6 +45,8 @@ pub enum SettingsDialogMsg {
     ChooseCacheDirRequest,
     OpenCacheDir(PathBuf),
     SwitchFullTimestamp,
+    SetThreadsNumber,
+    SetDefaultConnectionTimeout,
     Ignore,
     MessagesColumnSelected(usize),
     MessagesColumnOrderSelected(usize),
@@ -60,6 +65,43 @@ impl Component for SettingsDialogModel {
         #[root]
         adw::PreferencesDialog {
             set_title: "Preferences",
+            add = &adw::PreferencesPage {
+                set_title: "Application",
+                set_name: Some("Application"),
+                set_icon_name: Some("emblem-system-symbolic"),
+                add = &adw::PreferencesGroup {
+                    set_title: "General",
+                    #[name = "threads_number"]
+                    adw::SpinRow {
+                        set_title: "Threads",
+                        set_subtitle: "Number of available threads (requires restart)",
+                        set_selectable: false,
+                        set_activatable: false,
+                        set_focusable: false,
+                        set_focus_on_click: false,
+                        set_snap_to_ticks: true,
+                        set_numeric: true,
+                        set_wrap: true,
+                        connect_value_notify => SettingsDialogMsg::SetThreadsNumber,
+                    },
+                },
+                add = &adw::PreferencesGroup {
+                    set_title: "Connection",
+                    #[name = "default_connection_timeout"]
+                    adw::SpinRow {
+                        set_title: "Default connection timeout",
+                        set_subtitle: "Timeout in seconds",
+                        set_selectable: true,
+                        set_activatable: true,
+                        set_focusable: true,
+                        set_focus_on_click: true,
+                        set_snap_to_ticks: false,
+                        set_numeric: true,
+                        set_wrap: false,
+                        connect_value_notify => SettingsDialogMsg::SetDefaultConnectionTimeout,
+                    },
+                },
+            },
             add = &adw::PreferencesPage {
                 set_title: "Messages",
                 set_name: Some("Messages"),
@@ -139,9 +181,7 @@ impl Component for SettingsDialogModel {
         let default_idx = 0;
         let default_message_column_combo = SimpleComboRow::builder()
             .launch(SimpleComboRow {
-                variants: MESSAGE_COLUMNS.iter()
-                .map(|s| s.to_string())
-                .collect(),
+                variants: MESSAGE_COLUMNS.iter().map(|s| s.to_string()).collect(),
                 active_index: Some(default_idx),
             })
             .forward(
@@ -157,6 +197,7 @@ impl Component for SettingsDialogModel {
                 sender.input_sender(),
                 SettingsDialogMsg::MessagesColumnOrderSelected,
             );
+
         let model = SettingsDialogModel {
             cache_dir: current.cache_dir,
             cache_dir_dialog,
@@ -165,10 +206,38 @@ impl Component for SettingsDialogModel {
             messages_sort_column_order_combo: default_message_column_order_combo,
             messages_sort_column: current.messages_sort_column,
             messages_sort_column_order: current.messages_sort_column_order,
+            threads_number: current.threads_number as f64,
+            default_connection_timeout: current.default_connection_timeout as f64,
         };
         let messages_sort_column_combo = model.messages_sort_column_combo.widget();
         let messages_sort_column_order_combo = model.messages_sort_column_order_combo.widget();
         let widgets = view_output!();
+        let adjustment_threads_number = Adjustment::builder()
+            .lower(1.0)
+            .upper(50.0)
+            .page_size(0.0)
+            .step_increment(1.0)
+            .value(current.threads_number as f64)
+            .build();
+        widgets
+            .threads_number
+            .set_adjustment(Some(&adjustment_threads_number));
+        widgets
+            .threads_number
+            .set_update_policy(gtk::SpinButtonUpdatePolicy::IfValid);
+        let adjustment_default_timeout = Adjustment::builder()
+            .lower(0.0)
+            .upper(1800.0)
+            .page_size(0.0)
+            .step_increment(5.0)
+            .value(current.default_connection_timeout as f64)
+            .build();
+        widgets
+            .default_connection_timeout
+            .set_adjustment(Some(&adjustment_default_timeout));
+        widgets
+            .default_connection_timeout
+            .set_update_policy(gtk::SpinButtonUpdatePolicy::IfValid);
         ComponentParts { model, widgets }
     }
 
@@ -190,7 +259,11 @@ impl Component for SettingsDialogModel {
                 sender.input(SettingsDialogMsg::Save);
             }
             SettingsDialogMsg::MessagesColumnOrderSelected(_idx) => {
-                let column_order = match self.messages_sort_column_order_combo.model().get_active_elem() {
+                let column_order = match self
+                    .messages_sort_column_order_combo
+                    .model()
+                    .get_active_elem()
+                {
                     Some(opt) => opt.to_string(),
                     None => MessagesSortOrder::Default.to_string(),
                 };
@@ -208,12 +281,14 @@ impl Component for SettingsDialogModel {
                     .iter()
                     .position(|v| *v == self.messages_sort_column.as_str())
                     .expect("Should return option index");
-                self.messages_sort_column_combo.emit(SimpleComboRowMsg::SetActiveIdx(combo_idx));
+                self.messages_sort_column_combo
+                    .emit(SimpleComboRowMsg::SetActiveIdx(combo_idx));
                 let combo_idx = MessagesSortOrder::VALUES
                     .iter()
                     .position(|v| *v.to_string() == self.messages_sort_column_order)
                     .expect("Should return option index");
-                self.messages_sort_column_order_combo.emit(SimpleComboRowMsg::SetActiveIdx(combo_idx));
+                self.messages_sort_column_order_combo
+                    .emit(SimpleComboRowMsg::SetActiveIdx(combo_idx));
                 root.queue_allocate();
                 root.present(parent);
             }
@@ -236,13 +311,25 @@ impl Component for SettingsDialogModel {
                 self.is_full_timestamp = widgets.is_full_timestamp_row.is_active();
                 sender.input(SettingsDialogMsg::Save);
             }
+            SettingsDialogMsg::SetThreadsNumber => {
+                let value = widgets.threads_number.value();
+                self.threads_number = value;
+                sender.input(SettingsDialogMsg::Save);
+            }
+            SettingsDialogMsg::SetDefaultConnectionTimeout => {
+                let value = widgets.default_connection_timeout.value();
+                self.default_connection_timeout = value;
+                sender.input(SettingsDialogMsg::Save);
+            }
             SettingsDialogMsg::Save => {
                 let cache_dir = self.cache_dir.clone();
                 let settings = Settings {
-                    cache_dir: cache_dir,
+                    cache_dir,
                     is_full_timestamp: self.is_full_timestamp,
                     messages_sort_column: self.messages_sort_column.clone(),
                     messages_sort_column_order: self.messages_sort_column_order.clone(),
+                    threads_number: self.threads_number as u8,
+                    default_connection_timeout: self.default_connection_timeout as usize,
                 };
                 info!("settings_dialog::saving::{:?}", settings);
                 settings.write().expect("should write current settings");
