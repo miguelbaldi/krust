@@ -132,3 +132,32 @@ scrolledwindow.entry textview text {
 .tasks-list> :hover {
   background: none;
 }
+
+/*
+levelbar block.filled {
+  background-color: blue;
+}
+*/
+levelbar block.low {
+  background-color: green;
+}
+
+levelbar block.high {
+  background-color: orange;
+}
+
+@keyframes attention {
+    0% {
+        background-color: #DCDCDC;
+    }
+    70% {
+        background-color: orange;
+    }
+    100% {
+        background-color: red;
+    }
+}
+
+levelbar block.full {
+    animation: attention 1s ease-in-out infinite;
+}

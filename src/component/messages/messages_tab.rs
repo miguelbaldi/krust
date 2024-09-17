@@ -930,8 +930,8 @@ impl FactoryComponent for MessagesTabModel {
                 let topic = self.topic.clone().unwrap();
                 let result_topic =
                     MessagesWorker::new().cleanup_messages(&MessagesCleanupRequest {
-                        connection: conn,
-                        topic: topic.clone(),
+                        connection_id: conn.id.unwrap(),
+                        topic_name: topic.name.clone(),
                     });
                 info!("destroying cached message::{:?}", result_topic.clone());
                 match result_topic {

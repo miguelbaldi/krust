@@ -242,11 +242,11 @@ impl KafkaBackend {
         partitions
     }
     pub async fn send_messages(&self, topic: &String, messages: &[KrustMessage]) {
-        info!("fetching partitions from topic {}", topic);
+        info!("[send_messages] creating producer for topic {}", topic);
         let producer: FutureProducer = self.producer().expect("Producer creation failed");
         let producer = producer.borrow();
 
-        debug!("Producer created");
+        debug!("[send_messages] producer created");
         let messages_futures = messages
             .iter()
             .map(|message| async move {
@@ -278,7 +278,7 @@ impl KafkaBackend {
         // This loop will wait until all delivery statuses have been received.
         for future in messages_futures {
             let result = future.await;
-            info!("Future completed. Result: {:?}", result);
+            trace!("Message sent, future completed. Result: {}", result.is_ok());
         }
     }
 

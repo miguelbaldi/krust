@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::string::ToString;
 use std::{fmt::Display, str::FromStr};
 
+use once_cell::sync::Lazy;
+use regex::Regex;
 use rusqlite::{named_params, params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use strum::EnumString;
@@ -84,9 +86,10 @@ pub struct Repository {
 }
 #[derive(Clone)]
 pub struct MessagesRepository {
-    topic_name: String,
-    path: PathBuf,
-    database_name: String,
+    pub topic_name: String,
+    pub path: PathBuf,
+    pub database_name: String,
+    pub connection_id: usize,
 }
 #[derive(Debug, Clone)]
 pub struct MessagesSearchOrder {
@@ -102,9 +105,25 @@ impl MessagesRepository {
             topic_name: topic_name.clone(),
             path: path.clone(),
             database_name,
+            connection_id,
         }
     }
-
+    pub fn from_filename(filename: String) -> Self {
+        static RE: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"topic_(?P<connection_id>\d+)_(?P<topic_name>\S+)\.db").unwrap()
+        });
+        let caps = RE.captures(&filename).unwrap();
+        let connection_id = caps["connection_id"].parse::<usize>().unwrap();
+        let topic_name = &caps["topic_name"].to_string();
+        let path = PathBuf::from(Settings::read().unwrap_or_default().cache_dir.as_str());
+        let database_name = format!("topic_{}_{}", connection_id, topic_name);
+        Self {
+            topic_name: topic_name.clone(),
+            path: path.clone(),
+            database_name,
+            connection_id,
+        }
+    }
     pub fn get_connection(&self) -> Connection {
         let conn = database_connection_with_name(&self.path, &self.database_name)
             .expect("problem acquiring database connection");

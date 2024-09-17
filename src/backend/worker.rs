@@ -49,8 +49,8 @@ pub struct MessagesResponse {
 }
 
 pub struct MessagesCleanupRequest {
-    pub connection: KrustConnection,
-    pub topic: KrustTopic,
+    pub connection_id: usize,
+    pub topic_name: String,
 }
 
 pub struct MessagesTotalCounterRequest {
@@ -67,8 +67,8 @@ impl MessagesWorker {
 
     pub fn cleanup_messages(self, request: &MessagesCleanupRequest) -> Option<KrustTopic> {
         let mut repo = Repository::new();
-        let conn_id = request.connection.id.unwrap();
-        let has_topic = repo.find_topic(conn_id, &request.topic.name);
+        let conn_id = request.connection_id;
+        let has_topic = repo.find_topic(conn_id, &request.topic_name);
         match has_topic {
             Some(mut topic) => {
                 let mut mrepo = MessagesRepository::new(conn_id, &topic.name);

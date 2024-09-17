@@ -18,6 +18,7 @@ use tracing::*;
 use crate::{
     backend::repository::{KrustConnection, KrustTopic, Repository},
     component::{
+        cache_manager_dialog::{CacheManagerDialogInit, CacheManagerDialogModel},
         connection_list::{KrustConnectionMsg, KrustConnectionOutput},
         connection_page::{ConnectionPageModel, ConnectionPageMsg, ConnectionPageOutput},
         settings_dialog::{SettingsDialogInit, SettingsDialogMsg},
@@ -31,6 +32,7 @@ use crate::{
 };
 
 use super::{
+    cache_manager_dialog::CacheManagerDialogMsg,
     connection_list::ConnectionListModel,
     messages::messages_page::{MessagesPageModel, MessagesPageMsg},
     settings_dialog::SettingsDialogModel,
@@ -52,6 +54,7 @@ pub enum AppMsg {
     HandleTopicsError(KrustConnection, bool),
     RemoveConnection(DynamicIndex, KrustConnection),
     ShowSettings,
+    ShowCacheManager,
     SavedSettings,
     ShowToast(String, String),
     HideToast(String),
@@ -74,6 +77,7 @@ pub struct AppModel {
     topics_page: Controller<TopicsPageModel>,
     messages_page: Controller<MessagesPageModel>,
     settings_dialog: Controller<SettingsDialogModel>,
+    cache_manager_dialog: Controller<CacheManagerDialogModel>,
 }
 
 relm4::new_action_group!(pub(super) WindowActionGroup, "win");
@@ -81,6 +85,7 @@ relm4::new_stateless_action!(pub(super) EditSettings, WindowActionGroup, "edit-s
 relm4::new_stateless_action!(pub(super) AddConnection, WindowActionGroup, "add-connection");
 relm4::new_stateless_action!(pub(super) ShortcutsAction, WindowActionGroup, "show-help-overlay");
 relm4::new_stateless_action!(AboutAction, WindowActionGroup, "about");
+relm4::new_stateless_action!(pub(super) CacheManagerAction, WindowActionGroup, "cache-manager");
 
 pub static TOASTER_BROKER: MessageBroker<AppMsg> = MessageBroker::new();
 
@@ -96,6 +101,7 @@ impl Component for AppModel {
             section! {
                 "_Settings" => EditSettings,
                 "_Add connection" => AddConnection,
+                "_Cache manager" => CacheManagerAction,
                 "_Keyboard" => ShortcutsAction,
                 "_About" => AboutAction,
             }
@@ -281,6 +287,11 @@ impl Component for AppModel {
             .launch(SettingsDialogInit {})
             .detach();
 
+        let cache_manager_dialog: Controller<CacheManagerDialogModel> =
+            CacheManagerDialogModel::builder()
+                .launch(CacheManagerDialogInit {})
+                .detach();
+
         let state = State::read().unwrap_or_default();
         info!("starting with application state: {:?}", &state);
         let widgets = view_output!();
@@ -305,10 +316,16 @@ impl Component for AppModel {
         let about_action = RelmAction::<AboutAction>::new_stateless(move |_| {
             about_sender.send(()).unwrap();
         });
+
+        let cm_sender = sender.clone();
+        let cache_manager_action = RelmAction::<CacheManagerAction>::new_stateless(move |_| {
+            cm_sender.input(AppMsg::ShowCacheManager);
+        });
         info!("adding actions to main windows");
         actions.add_action(edit_settings_action);
         actions.add_action(add_connection_action);
         actions.add_action(about_action);
+        actions.add_action(cache_manager_action);
         actions.register_for_widget(&widgets.main_window);
 
         info!("listing all connections");
@@ -346,6 +363,7 @@ impl Component for AppModel {
             topics_page,
             messages_page,
             settings_dialog,
+            cache_manager_dialog,
         };
         widgets.load_window_size();
         // DEBUG: start
@@ -418,6 +436,9 @@ impl Component for AppModel {
                 self.connection_page.emit(ConnectionPageMsg::New);
                 self.connection_page.widget().set_visible(true);
                 //widgets.main_stack.set_visible_child_name("Connection");
+            }
+            AppMsg::ShowCacheManager => {
+                self.cache_manager_dialog.emit(CacheManagerDialogMsg::Show);
             }
             AppMsg::AddConnection(conn) => {
                 info!("|-->Adding connection ");
