@@ -34,7 +34,7 @@ use crate::{
 use super::{
     cache_manager_dialog::CacheManagerDialogMsg,
     connection_list::ConnectionListModel,
-    messages::messages_page::{MessagesPageModel, MessagesPageMsg},
+    messages::messages_page::{MessagesPageModel, MessagesPageMsg, MESSAGES_PAGE_BROKER},
     settings_dialog::SettingsDialogModel,
     topics::topics_page::TopicsPageModel,
 };
@@ -280,7 +280,7 @@ impl Component for AppModel {
 
         let messages_page: Controller<MessagesPageModel> = MessagesPageModel::builder()
             .priority(glib::Priority::HIGH_IDLE)
-            .launch(())
+            .launch_with_broker((), &MESSAGES_PAGE_BROKER)
             .detach();
 
         let settings_dialog: Controller<SettingsDialogModel> = SettingsDialogModel::builder()

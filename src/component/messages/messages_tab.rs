@@ -116,6 +116,7 @@ pub enum MessagesTabMsg {
     ResendMessages(Copy),
     AddMessages,
     SetCacheOrder(Option<String>, String),
+    RefreshTopic,
 }
 
 #[derive(Debug)]
@@ -941,6 +942,22 @@ impl FactoryComponent for MessagesTabModel {
                 widgets.cache_timestamp.set_text("");
                 widgets.btn_cache_toggle.set_active(false);
                 sender.input(MessagesTabMsg::ToggleMode(false));
+            }
+            MessagesTabMsg::RefreshTopic => {
+                let conn = self.connection.clone().unwrap();
+                let topic = self.topic.clone().unwrap();
+                let result_topic = Repository::new().find_topic(conn.id.unwrap(), &topic.name);
+                match result_topic {
+                    Some(topic) => {
+                        self.topic = Some(topic.clone());
+                        if topic.cached.is_none() {
+                            widgets.cache_timestamp.set_text("");
+                            widgets.btn_cache_toggle.set_active(false);
+                            sender.input(MessagesTabMsg::ToggleMode(false));
+                        }
+                    }
+                    None => warn!("unable to refresh topic after cache destroyed"),
+                };
             }
             MessagesTabMsg::RefreshTotalCounter => {
                 info!("refreshing total counter");

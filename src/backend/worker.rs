@@ -3,7 +3,10 @@ use tokio::select;
 use tracing::{info, warn};
 
 use crate::{
-    component::task_manager::{Task, TaskManagerMsg, TASK_MANAGER_BROKER},
+    component::{
+        messages::messages_page::{MessagesPageMsg, MESSAGES_PAGE_BROKER},
+        task_manager::{Task, TaskManagerMsg, TASK_MANAGER_BROKER},
+    },
     config::ExternalError,
     Repository,
 };
@@ -78,7 +81,13 @@ impl MessagesWorker {
                     Ok(_) => {
                         let save_result = repo.save_topic(conn_id, &topic);
                         match save_result {
-                            Ok(r) => info!("topic updated: {}", r),
+                            Ok(r) => {
+                                info!("topic cache destroyed: {}", r);
+                                MESSAGES_PAGE_BROKER.send(MessagesPageMsg::RefreshTopicTab {
+                                    connection_id: conn_id,
+                                    topic_name: topic.name.clone(),
+                                });
+                            }
                             Err(e) => warn!("unable to update topic: {:?}", e),
                         };
                         Some(topic)
