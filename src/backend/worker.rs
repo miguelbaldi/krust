@@ -96,24 +96,13 @@ impl MessagesWorker {
         }
     }
     pub async fn count_messages(self, request: &MessagesTotalCounterRequest) -> Option<usize> {
-        let mut repo = Repository::new();
-        let conn_id = request.connection.id.unwrap();
-        let has_topic = repo.find_topic(conn_id, &request.topic.name);
         let kafka = KafkaBackend::new(&request.connection);
-        match has_topic {
-            Some(topic) => {
-                let mtopic = kafka
-                    .topic_message_count(&topic.name, Some(KafkaFetch::Oldest), None, None)
-                    .await;
+        let mtopic = kafka
+            .topic_message_count(&request.topic.name, Some(KafkaFetch::Oldest), None, None)
+            .await;
 
-                let total = mtopic.total.unwrap_or_default();
-                Some(total)
-            }
-            None => {
-                info!("nothing to count");
-                None
-            }
-        }
+        let total = mtopic.total.unwrap_or_default();
+        Some(total)
     }
     pub async fn get_messages(
         self,

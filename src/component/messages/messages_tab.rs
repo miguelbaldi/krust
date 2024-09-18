@@ -965,7 +965,7 @@ impl FactoryComponent for MessagesTabModel {
                         })
                         .await
                         .unwrap_or_default();
-                    trace!("selected topic {} with {} messages", topic.name, &total,);
+                    debug!("selected topic {} with {} messages", topic.name, &total,);
                     CommandMsg::RefreshTotalCounterResult(task.id, total)
                 });
             }
