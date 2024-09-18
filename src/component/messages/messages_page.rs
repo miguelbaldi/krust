@@ -11,11 +11,13 @@ use sourceview::prelude::*;
 use sourceview5 as sourceview;
 use tracing::info;
 
-use super::messages_tab::{MessagesTabInit, MessagesTabModel};
+use super::messages_tab::{MessagesTabInit, MessagesTabModel, MessagesTabMsg};
 
 relm4::new_action_group!(pub(super) TopicTabActionGroup, "topic-tab");
 relm4::new_stateless_action!(pub(super) PinTabAction, TopicTabActionGroup, "toggle-pin");
 relm4::new_stateless_action!(pub(super) CloseTabAction, TopicTabActionGroup, "close");
+
+pub static MESSAGES_PAGE_BROKER: MessageBroker<MessagesPageMsg> = MessageBroker::new();
 
 pub struct MessagesPageModel {
     topic: Option<KrustTopic>,
@@ -26,9 +28,13 @@ pub struct MessagesPageModel {
 #[derive(Debug)]
 pub enum MessagesPageMsg {
     Open(Box<KrustConnection>, Box<KrustTopic>),
-    PageAdded(TabPage, i32),
+    PageAdded(i32),
     MenuPageClosed,
     MenuPagePin,
+    RefreshTopicTab {
+        connection_id: usize,
+        topic_name: String,
+    },
 }
 
 #[relm4::component(pub)]
@@ -92,8 +98,8 @@ impl Component for MessagesPageModel {
             }
         });
         let tabs_sender = sender.clone();
-        topics_viewer.connect_page_attached(move |_tab_view, page, n| {
-            tabs_sender.input(MessagesPageMsg::PageAdded(page.clone(), n));
+        topics_viewer.connect_page_attached(move |_tab_view, _page, n| {
+            tabs_sender.input(MessagesPageMsg::PageAdded(n));
         });
 
         let widgets = view_output!();
@@ -129,15 +135,8 @@ impl Component for MessagesPageModel {
     ) {
         match msg {
             MessagesPageMsg::Open(connection, topic) => {
-                let mut has_page: Option<(usize, TabPage)> = None;
-                for i in 0..widgets.topics_viewer.n_pages() {
-                    let tab = widgets.topics_viewer.nth_page(i);
-                    let title = format!("[{}] {}", connection.name, topic.name);
-                    if title == tab.title() {
-                        has_page = Some((i as usize, tab.clone()));
-                        break;
-                    }
-                }
+                let title = format!("[{}] {}", connection.name, topic.name);
+                let has_page: Option<(usize, TabPage)> = self.get_tab_page_by_title(widgets, title);
                 match has_page {
                     Some((pos, page)) => {
                         info!(
@@ -163,16 +162,19 @@ impl Component for MessagesPageModel {
                     }
                 }
             }
-            MessagesPageMsg::PageAdded(page, index) => {
+            MessagesPageMsg::PageAdded(index) => {
                 let tab_model = self.topics.get(index.try_into().unwrap()).unwrap();
                 let title = format!(
                     "[{}] {}",
                     tab_model.connection.clone().unwrap().name,
                     tab_model.topic.clone().unwrap().name
                 );
-                page.set_title(title.as_str());
-                page.set_live_thumbnail(true);
-                widgets.topics_viewer.set_selected_page(&page);
+                let page = self.get_tab_page_by_index(widgets, index);
+                if let Some(page) = page {
+                    page.set_title(title.as_str());
+                    page.set_live_thumbnail(true);
+                    widgets.topics_viewer.set_selected_page(&page);
+                }
             }
             MessagesPageMsg::MenuPagePin => {
                 let page = widgets.topics_viewer.selected_page();
@@ -215,8 +217,65 @@ impl Component for MessagesPageModel {
                     }
                 }
             }
+            MessagesPageMsg::RefreshTopicTab {
+                connection_id,
+                topic_name,
+            } => {
+                info!(
+                    "refresh topic tab[connection_id={}, topic_name={}]",
+                    connection_id, topic_name
+                );
+                if let Some(conn) = self.connection.clone() {
+                    if let Some(conn_id) = conn.id {
+                        if conn_id == connection_id {
+                            let topics = self.topics.guard();
+                            for i in 0..topics.len() {
+                                let tp = topics.get(i);
+                                if let Some(tp) = tp {
+                                    if let Some(topic) = tp.topic.clone() {
+                                        if topic.name == topic_name {
+                                            info!(
+                                                "refresh topic tab: {}-{}",
+                                                connection_id, topic_name
+                                            );
+                                            topics.send(i, MessagesTabMsg::RefreshTopic);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         };
 
         self.update_view(widgets, sender);
+    }
+}
+
+impl MessagesPageModel {
+    fn get_tab_page_by_title(
+        &self,
+        widgets: &mut MessagesPageModelWidgets,
+        title: String,
+    ) -> Option<(usize, TabPage)> {
+        let mut has_page: Option<(usize, TabPage)> = None;
+        for i in 0..widgets.topics_viewer.n_pages() {
+            let tab = widgets.topics_viewer.nth_page(i);
+            if title == tab.title() {
+                has_page = Some((i as usize, tab.clone()));
+                break;
+            }
+        }
+        has_page
+    }
+    fn get_tab_page_by_index(
+        &self,
+        widgets: &mut MessagesPageModelWidgets,
+        idx: i32,
+    ) -> Option<TabPage> {
+        let tab = widgets.topics_viewer.nth_page(idx);
+        Some(tab)
     }
 }
