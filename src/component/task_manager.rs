@@ -1,11 +1,5 @@
-//! Alert dialog for displaying arbitrary errors.
-//!
-//! Inspired by [`relm4_components::alert`], but allows sending the dialog text as part of the
-//! `Show` message, and supports displaying only a single button to dismiss.
-
 use std::borrow::Borrow;
 use std::cell::RefCell;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gtk::glib::SignalHandlerId;
@@ -29,7 +23,6 @@ struct SidebarListItem {
     variant: TaskVariant,
     label: StringBinding,
     spin: BoolBinding,
-    counter: Arc<Mutex<u8>>,
 }
 
 impl SidebarListItem {
@@ -38,7 +31,6 @@ impl SidebarListItem {
             variant,
             label: StringBinding::default(),
             spin: BoolBinding::new(true),
-            counter: Arc::new(Mutex::new(1)),
         }
     }
 }
@@ -107,7 +99,7 @@ impl RelmListItem for SidebarListItem {
 // START: tasks_list
 #[derive(Debug)]
 struct TaskListItem {
-    value: Task,
+    pub value: Task,
     progress: F64Binding,
     sender: Sender<TaskManagerCommand>,
     cancel_handler_id: RefCell<Option<SignalHandlerId>>,
@@ -355,18 +347,19 @@ impl Component for TaskManagerModel {
             TaskManagerMsg::AddTask(task) => {
                 info!("task_manager::add_task: id={}", task.id);
                 widgets.tasks_button.set_sensitive(true);
+                let item_sender = sender.command_sender().clone();
+                self.tasks_list_wrapper
+                    .append(TaskListItem::new(task.clone(), item_sender));
                 let maybe_index = self
                     .sidebar_list_wrapper
                     .find(|t| t.variant == task.variant);
+                let counter = self.count_tasks_by_variant(task.variant.clone());
                 if let Some(idx) = maybe_index {
                     let found = self.sidebar_list_wrapper.get(idx).unwrap();
                     let item = &mut found.borrow_mut();
-                    let counter = item.counter.clone();
-                    let mut counter = counter.lock().unwrap();
-                    *counter += 1;
                     let label = &mut item.label;
                     let mut guard = label.guard();
-                    *guard = SidebarListItem::label(&task.variant, *counter);
+                    *guard = SidebarListItem::label(&task.variant, counter);
                     let spinner = &mut item.spin;
                     let mut guard = spinner.guard();
                     *guard = true;
@@ -374,13 +367,10 @@ impl Component for TaskManagerModel {
                     let item = SidebarListItem::new(task.variant.clone());
                     let mut label = item.label.guard();
                     let mut spinner = item.spin.guard();
-                    *label = SidebarListItem::label(&task.variant, *item.counter.lock().unwrap());
+                    *label = SidebarListItem::label(&task.variant, counter);
                     *spinner = true;
                     self.sidebar_list_wrapper.append(item);
                 }
-                let item_sender = sender.command_sender().clone();
-                self.tasks_list_wrapper
-                    .append(TaskListItem::new(task, item_sender));
                 sender
                     .command_sender()
                     .emit(TaskManagerCommand::NeedsAttention);
@@ -410,9 +400,8 @@ impl Component for TaskManagerModel {
                 if let Some(idx) = maybe_index {
                     let found = self.sidebar_list_wrapper.get(idx).unwrap();
                     let item = &mut found.borrow_mut();
-                    let counter = item.counter.clone();
-                    let counter = counter.lock().unwrap();
-                    if *counter <= 1 {
+                    let counter = self.count_tasks_by_variant(task.variant.clone());
+                    if counter < 1 {
                         let label = &mut item.label;
                         let mut guard = label.guard();
                         *guard = SidebarListItem::label_done(&item.variant);
@@ -422,7 +411,7 @@ impl Component for TaskManagerModel {
                     }
                 }
                 sender.oneshot_command(async move {
-                    sleep(Duration::from_secs(5)).await;
+                    sleep(Duration::from_secs(2)).await;
                     trace!("removing task with index: {}", task.id);
                     TaskManagerCommand::RemoveTask(task.clone())
                 });
@@ -440,28 +429,27 @@ impl Component for TaskManagerModel {
         match message {
             TaskManagerCommand::RemoveTask(task) => {
                 debug!("TaskManagerCommand::RemoveTask[{:?}]", task);
+                let maybe_index = self.tasks_list_wrapper.find(|t| t.value.id.eq(&task.id));
+                if let Some(idx) = maybe_index {
+                    self.tasks_list_wrapper.remove(idx);
+                }
                 let maybe_index = self
                     .sidebar_list_wrapper
                     .find(|t| t.variant == task.variant);
                 if let Some(idx) = maybe_index {
                     let found = self.sidebar_list_wrapper.get(idx).unwrap();
                     let item = &mut found.borrow_mut();
-                    let counter = item.counter.clone();
-                    let mut counter = counter.lock().unwrap();
-                    if *counter <= 1 {
+
+                    let counter = self.count_tasks_by_variant(task.variant.clone());
+                    if counter < 1 {
                         sender
                             .command_sender()
                             .emit(TaskManagerCommand::RemoveSidebarTask(idx));
                     } else {
-                        *counter -= 1;
                         let label = &mut item.label;
                         let mut guard = label.guard();
-                        *guard = SidebarListItem::label(&task.variant, *counter);
+                        *guard = SidebarListItem::label(&task.variant, counter);
                     }
-                }
-                let maybe_index = self.tasks_list_wrapper.find(|t| t.value.id.eq(&task.id));
-                if let Some(idx) = maybe_index {
-                    self.tasks_list_wrapper.remove(idx);
                 }
             }
             TaskManagerCommand::RemoveSidebarTask(idx) => {
@@ -489,5 +477,22 @@ impl Component for TaskManagerModel {
                     .emit(TaskManagerCommand::RemoveTask(task));
             }
         }
+    }
+}
+
+impl TaskManagerModel {
+    fn count_tasks_by_variant(&self, variant: TaskVariant) -> u8 {
+        let mut counter: u8 = 0;
+
+        for i in 0..self.tasks_list_wrapper.len() {
+            let item = self.tasks_list_wrapper.get(i);
+            if let Some(item) = item {
+                let task = item.borrow_mut().value.clone();
+                if task.variant == variant {
+                    counter += 1;
+                }
+            }
+        }
+        counter
     }
 }
