@@ -11,7 +11,7 @@ Mystic (light blue): #D8E9F0
 }
 
 button.krust-destroy {
-  background: #FF3F34;
+  background: #ff3f34;
 }
 
 button.krust-toggle {
@@ -24,7 +24,7 @@ button.krust-toggle:checked {
 }
 
 .status-bar {
-  background: #FDEBD8;
+  background: #fdebd8;
 }
 
 /*
@@ -54,7 +54,7 @@ btn-favourite check:checked {
   box-shadow: 0 0 0 0;
   -gtk-icon-size: 20px;
   padding: 0 0 0 0;
-  color: #FF3F34;
+  color: #ff3f34;
   animation: spin 1s linear 1s initial;
   animation-name: spin;
   animation-duration: 5s;
@@ -72,7 +72,6 @@ tab:selected {
 
 .tab-title label {
   text-decoration-line: none;
-
 }
 
 scrolledwindow.entry {
@@ -80,7 +79,8 @@ scrolledwindow.entry {
   background-color: rgb(255, 255, 255);
   border-radius: 12px;
   /* box-shadow: rgba(60, 64, 67, 0.3) 0px 1px 2px 0px, rgba(60, 64, 67, 0.15) 0px 2px 6px 2px; */
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.03), 0 1px 3px 1px rgba(0, 0, 0, 0.07), 0 2px 6px 2px rgba(0, 0, 0, 0.03);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.03), 0 1px 3px 1px rgba(0, 0, 0, 0.07),
+    0 2px 6px 2px rgba(0, 0, 0, 0.03);
 }
 
 scrolledwindow.entry:focus-within {
@@ -97,31 +97,33 @@ scrolledwindow.entry textview text {
 }
 
 @keyframes needs_attention_keyframes {
-  0% {}
+  0% {
+  }
 
   10% {
     background-color: @accent_bg_color;
   }
 
-  100% {}
+  100% {
+  }
 }
 
 #TaskManager {
-  background-color: alpha(currentColor, .1);
+  background-color: alpha(currentColor, 0.1);
 }
 
-#TaskManager.needs-attention>menubutton>button {
+#TaskManager.needs-attention > menubutton > button {
   animation: needs_attention_keyframes 2s ease-in-out;
 }
 
-#TaskManager menubutton>button listview {
+#TaskManager menubutton > button listview {
   background: none;
   border-spacing: 9px;
   font-weight: bold;
 }
 
 /* Give the button same colors as the rows */
-#TaskManager menubutton>button *:hover {
+#TaskManager menubutton > button *:hover {
   background-color: inherit;
   background: none;
 }
@@ -129,7 +131,7 @@ scrolledwindow.entry textview text {
 /* Remove white background and highlight on hover which GTK adds by default
  * to GtkListBox. TODO: Switch to GtkListView and drop this CSS hack. */
 .tasks-list,
-.tasks-list> :hover {
+.tasks-list > :hover {
   background: none;
 }
 
@@ -147,17 +149,17 @@ levelbar block.high {
 }
 
 @keyframes attention {
-    0% {
-        background-color: #DCDCDC;
-    }
-    70% {
-        background-color: orange;
-    }
-    100% {
-        background-color: red;
-    }
+  0% {
+    background-color: #dcdcdc;
+  }
+  70% {
+    background-color: orange;
+  }
+  100% {
+    background-color: red;
+  }
 }
 
 levelbar block.full {
-    animation: attention 1s ease-in-out infinite;
+  animation: attention 1s ease-in-out infinite;
 }
