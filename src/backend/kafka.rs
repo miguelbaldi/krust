@@ -26,7 +26,9 @@ use crate::component::task_manager::{Task, TaskManagerMsg, TASK_MANAGER_BROKER};
 use crate::config::ExternalError;
 use crate::Settings;
 
-use super::repository::{KrustConnectionSecurityType, KrustTopic, MessagesRepository};
+use super::repository::{
+    FetchMode, KrustConnectionSecurityType, KrustTopic, KrustTopicCache, MessagesRepository,
+};
 
 const GROUP_ID: &str = "krust-kafka-client";
 
@@ -73,6 +75,14 @@ pub struct KafkaBackend {
     pub config: KrustConnection,
 }
 
+#[derive(Clone)]
+pub struct CacheMessagesRequest<'a> {
+    pub task: Task,
+    pub cache_settings: KrustTopicCache,
+    pub messages_repository: &'a MessagesRepository,
+    pub refresh: bool,
+}
+
 impl KafkaBackend {
     pub fn new(config: &KrustConnection) -> Self {
         Self {
@@ -102,7 +112,7 @@ impl KafkaBackend {
                     .set("enable.partition.eof", "false")
                     .set("session.timeout.ms", "6000")
                     .set("enable.auto.commit", "false")
-                    .set("message.timeout.ms", "5000")
+                    .set("message.timeout.ms", "10000")
                     //.set("statistics.interval.ms", "30000")
                     .set("auto.offset.reset", "earliest")
                     .set("security.protocol", self.config.security_type.to_string())
@@ -128,7 +138,7 @@ impl KafkaBackend {
                     .set("enable.partition.eof", "false")
                     .set("session.timeout.ms", "6000")
                     .set("enable.auto.commit", "false")
-                    .set("message.timeout.ms", "5000")
+                    .set("message.timeout.ms", "10000")
                     //.set("statistics.interval.ms", "30000")
                     .set("auto.offset.reset", "earliest")
             }
@@ -381,8 +391,7 @@ impl KafkaBackend {
             };
         }
 
-        info!("topic {} has {} messages", topic, message_count);
-        KrustTopic {
+        let output = KrustTopic {
             connection_id: None,
             name: topic.clone(),
             cached: None,
@@ -397,63 +406,162 @@ impl KafkaBackend {
                     .expect("should return the total messages as usize"),
             ),
             favourite: None,
-        }
-    }
-    pub async fn cache_messages_for_topic(
-        &self,
-        task: Task,
-        topic: &String,
-        total: usize,
-        mrepo: &MessagesRepository,
-        partitions: Option<Vec<Partition>>,
-        fetch: Option<KafkaFetch>,
-    ) -> Result<Duration, ExternalError> {
-        let start_mark = Instant::now();
-        let fetch = fetch.unwrap_or_default();
+        };
         info!(
-            "starting listing messages for topic {}, total {}",
-            topic, total
+            "topic {} has {} messages: {:?}",
+            topic, message_count, &output.partitions
         );
-        let topic_name = topic.as_str();
+        output
+    }
+    pub async fn fetch_and_build_partition_list<'a>(
+        &self,
+        request: &'a CacheMessagesRequest<'a>,
+    ) -> TopicPartitionList {
+        let topic = &request.cache_settings.topic_name.clone();
+        let fetch = request.cache_settings.fetch_mode;
+        let fetch_value = request.cache_settings.fetch_value.unwrap_or_default();
+        let refresh = request.refresh;
+        let mut mrepo = request.messages_repository.clone();
+        info!(
+            "fetching and building partitions for topic {}, fetch mode {:?}",
+            topic, fetch,
+        );
+
         let context = CustomContext;
         let consumer: LoggingConsumer = self.consumer(context).expect("Consumer creation failed");
-        let counter: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
-
-        let consumer = Arc::new(consumer);
-        info!("consumer created");
-        match partitions.clone() {
-            Some(partitions) => {
-                let mut partition_list = TopicPartitionList::with_capacity(partitions.capacity());
-                for p in partitions.iter() {
-                    let offset = match fetch {
-                        KafkaFetch::Newest => p
-                            .offset_high
+        let partitions = &self.fetch_partitions(topic).await;
+        let mut partition_list = TopicPartitionList::with_capacity(partitions.len());
+        if refresh {
+            let cached_partitions = (mrepo).find_offsets().unwrap_or_default();
+            let part_map = cached_partitions
+                .iter()
+                .map(|p| (p.id, p))
+                .collect::<HashMap<_, _>>();
+            partitions.iter().for_each(|p| {
+                partition_list
+                    .add_partition_offset(
+                        topic,
+                        p.id,
+                        part_map
+                            .get(&p.id)
+                            .and_then(|cp| cp.offset_high)
                             .map(Offset::from_raw)
                             .unwrap_or(Offset::Beginning),
-                        KafkaFetch::Oldest => Offset::Beginning,
-                    };
+                    )
+                    .expect("should add partition/offset to list");
+            });
+        } else {
+            match fetch {
+                FetchMode::All | FetchMode::Head => partitions.iter().for_each(|p| {
                     partition_list
-                        .add_partition_offset(topic_name, p.id, offset)
-                        .unwrap();
+                        .add_partition_offset(topic, p.id, Offset::Beginning)
+                        .expect("should add partition/offset to list");
+                }),
+                FetchMode::Tail => partitions.iter().for_each(|p| {
+                    partition_list
+                        .add_partition_offset(topic, p.id, Offset::OffsetTail(fetch_value))
+                        .expect("should add partition/offset to list");
+                }),
+                FetchMode::FromTimestamp => {
+                    let mut tpl = TopicPartitionList::with_capacity(partitions.len());
+                    partitions.iter().for_each(|p| {
+                        tpl.add_partition_offset(topic, p.id, Offset::from_raw(fetch_value))
+                            .expect("should add partition/offset to list");
+                    });
+                    let result = consumer.offsets_for_times(tpl, Duration::from_secs(60));
+                    if let Ok(tpl) = result {
+                        tpl.elements().iter().for_each(|t| {
+                            partition_list
+                                .add_partition_offset(t.topic(), t.partition(), t.offset())
+                                .expect("should add partition/offset to list");
+                        });
+                    };
                 }
-                info!("seeking partitions\n{:?}", partition_list);
-                consumer
-                    .assign(&partition_list)
-                    .expect("Can't subscribe to partition list");
+            };
+        }
+
+        info!("topic {} partition list {:?}", topic, partition_list);
+        partition_list
+    }
+    pub async fn cache_messages<'a>(
+        &self,
+        request: &'a CacheMessagesRequest<'a>,
+    ) -> Result<Duration, ExternalError> {
+        let start_mark = Instant::now();
+        let fetch = request.cache_settings.fetch_mode;
+        let fetch_value = request.cache_settings.fetch_value;
+        let topic_name = request.cache_settings.topic_name.clone();
+        let mrepo = request.messages_repository;
+        let task = request.task.clone();
+        let partitions = self.fetch_and_build_partition_list(request).await;
+        let (total, partitions_list) = match fetch {
+            FetchMode::All => {
+                let result = self
+                    .topic_message_count(&topic_name, None, None, None)
+                    .await;
+                info!("cache_messages[{:?}]::{:?}", fetch, &result.partitions);
+                (result.total.unwrap_or_default(), result.partitions)
             }
-            None => {
-                info!("consuming without seek");
-                consumer
-                    .subscribe(&[topic_name])
-                    .expect("Can't subscribe to specified topics");
+            FetchMode::Head => {
+                let result = self
+                    .topic_message_count(&topic_name, Some(KafkaFetch::Oldest), fetch_value, None)
+                    .await;
+                (result.total.unwrap_or_default(), result.partitions)
+            }
+            FetchMode::Tail => {
+                let result = self
+                    .topic_message_count(&topic_name, Some(KafkaFetch::Newest), fetch_value, None)
+                    .await;
+                (result.total.unwrap_or_default(), result.partitions)
+            }
+            FetchMode::FromTimestamp => {
+                let ts_partitions: Vec<Partition> = partitions
+                    .elements()
+                    .iter()
+                    .map(|p| Partition {
+                        id: p.partition(),
+                        offset_high: p.offset().to_raw(),
+                        offset_low: None,
+                    })
+                    .collect();
+                let result = self
+                    .topic_message_count(&topic_name, None, None, Some(ts_partitions.clone()))
+                    .await;
+                let parts: Vec<Partition> = self
+                    .fetch_partitions(&topic_name)
+                    .await
+                    .iter()
+                    .map(|fp| {
+                        let p = ts_partitions.iter().find(|p| p.id == fp.id);
+                        Partition {
+                            id: fp.id,
+                            offset_low: p.and_then(|p1| p1.offset_high),
+                            offset_high: fp.offset_high,
+                        }
+                    })
+                    .collect();
+                debug!("from_timestamp partitions: {:?}", &parts);
+                (result.total.unwrap_or_default(), parts)
             }
         };
+        let part_last_offset_map = partitions_list
+            .iter()
+            .map(|p| (p.id, p.offset_high.unwrap_or_default()))
+            .collect::<HashMap<_, _>>();
+        let context = CustomContext;
+        let consumer: LoggingConsumer = self.consumer(context).expect("Consumer creation failed");
+        let consumer = Arc::new(consumer);
+        consumer
+            .assign(&partitions)
+            .expect("Can't subscribe to partition list");
+        let counter: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
         let (tx, rx) = mpsc::channel::<KrustMessage>(32);
         let writer_id = "worker-0".to_string();
         let writer_counter = Arc::new(AtomicUsize::new(0));
         let writer_task = task.clone();
         let writer_repo = mrepo.clone();
         let writer_token = writer_task.token.clone().unwrap();
+        let last_offset_map = Arc::new(part_last_offset_map.clone());
         let writer_handle = tokio::spawn(async move {
             select! {
                 _ = writer_token.cancelled() => {
@@ -468,15 +576,19 @@ impl KafkaBackend {
                     writer_counter,
                     writer_repo,
                     total,
+                    last_offset_map,
                 ) => {}
             }
         });
+        let timeout = self.timeout();
         let mk_consumer = |worker_id: String| {
+            let timeout = Arc::new(timeout);
             let consumer = consumer.clone();
             let mcounter = counter.clone();
             let token = task.token.clone().unwrap();
             let tx = tx.clone();
             let consumer_task = task.clone();
+            let last_offset_map = Arc::new(part_last_offset_map.clone());
             tokio::spawn(async move {
                 select! {
                     _ = token.cancelled() => {
@@ -484,13 +596,30 @@ impl KafkaBackend {
                         TASK_MANAGER_BROKER.send(TaskManagerMsg::RemoveTask(consumer_task.clone()));
                         // The token was cancelled
                     }
-                    _result = KafkaBackend::consumer_worker(worker_id.clone(), tx, consumer, mcounter, total) => {}
+                    _result = KafkaBackend::consumer_worker(worker_id.clone(), timeout, tx, consumer, mcounter, total, last_offset_map) => {}
                 }
             })
         };
-        for res in future::join_all((0..10).map(|i| mk_consumer(format!("worker-{}", i)))).await {
+        let max_threads = Settings::read()
+            .map(|st| st.threads_number - 1)
+            .unwrap_or(2) as usize;
+        let num_partitions = partitions.count();
+        let parallelism_factor = if num_partitions <= max_threads {
+            num_partitions
+        } else {
+            max_threads
+        };
+        info!(
+            "cache_messages::starting consumers with parallelism factor of {}",
+            parallelism_factor
+        );
+        for res in
+            future::join_all((0..parallelism_factor).map(|i| mk_consumer(format!("worker-{}", i))))
+                .await
+        {
             res.unwrap();
         }
+        std::mem::drop(tx);
         match writer_handle.await {
             Err(e) => {
                 let duration = start_mark.elapsed();
@@ -499,20 +628,21 @@ impl KafkaBackend {
                 let hours = (duration.as_secs() / 60) / 60;
                 let msg = format!(
                     "error caching messages for topic {}, duration: {}:{}:{}: {}",
-                    topic, hours, minutes, seconds, e
+                    topic_name, hours, minutes, seconds, e
                 );
-                core::result::Result::Err(ExternalError::CachingError(topic.clone(), msg))
+                core::result::Result::Err(ExternalError::CachingError(topic_name.clone(), msg))
             }
             Ok(_) => {
                 let duration = start_mark.elapsed();
                 info!(
                     "finished caching messages for topic {}, duration: {:?}",
-                    topic, duration
+                    topic_name, duration
                 );
                 core::result::Result::Ok(duration)
             }
         }
     }
+
     async fn db_writer_worker(
         worker_id: String,
         mut rx: Receiver<KrustMessage>,
@@ -520,10 +650,17 @@ impl KafkaBackend {
         counter: Arc<AtomicUsize>,
         repo: MessagesRepository,
         total: usize,
+        part_last_offset_map: Arc<HashMap<i32, i64>>,
     ) {
+        info!("Starting writer-{} total[{}]", worker_id, total);
         let conn = repo.get_connection();
         // Start receiving messages
         while let Some(message) = rx.recv().await {
+            trace!(
+                "writer-{}::message with offset {} trying to save",
+                worker_id,
+                &message.offset
+            );
             match repo.save_message(&conn, &message) {
                 Ok(_) => {
                     trace!(
@@ -543,102 +680,134 @@ impl KafkaBackend {
             let current_count = counter.load(Ordering::SeqCst);
             let progress_step = ((current_count as f64) * 1.0) / ((total as f64) * 1.0);
             TASK_MANAGER_BROKER.send(TaskManagerMsg::Progress(task.clone(), progress_step));
-            trace!("writer-{}::{}/{}", worker_id, current_count, total);
-            if current_count >= total {
-                break;
-            }
+            let current_offset = message.offset;
+            let current_partition = message.partition;
+            let max_offset = *part_last_offset_map
+                .get(&current_partition)
+                .expect("should have partition last offset");
+            trace!(
+                "writer-{}::{}/{} [partition={}, offset={}, max_offset={}]",
+                worker_id,
+                current_count,
+                total,
+                current_partition,
+                current_offset,
+                max_offset
+            );
         }
         info!("writer-{} finished", worker_id);
     }
     async fn consumer_worker(
         worker_id: String,
+        timeout: Arc<Duration>,
         tx: Sender<KrustMessage>,
         consumer: Arc<BaseConsumer<CustomContext>>,
         mcounter: Arc<AtomicUsize>,
         total: usize,
+        part_last_offset_map: Arc<HashMap<i32, i64>>,
     ) {
-        info!("Starting consumer[{}]", worker_id);
+        let timeout = timeout.mul_f32(3.0);
+        info!("Starting consumer-{}::timeout::{:?}", worker_id, timeout);
+        let local_counter: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
         loop {
-            trace!("[{}] waiting", worker_id);
-            match consumer.poll(Duration::from_secs(5)) {
+            match consumer.poll(timeout) {
                 None => {
-                    warn!("[{}] timeout", worker_id);
+                    warn!("consumer-{} timeout", worker_id);
                     break;
                 }
                 Some(result) => match result {
                     Err(e) => warn!("Kafka Error: {}", e),
                     Ok(m) => {
-                        let payload = match m.payload_view::<str>() {
-                            None => "",
-                            Some(Ok(s)) => s,
-                            Some(Err(e)) => {
-                                warn!("Error while deserializing message payload: {:?}", e);
-                                ""
-                            }
-                        };
-                        let key = match m.key_view::<str>() {
-                            None => "",
-                            Some(Ok(s)) => s,
-                            Some(Err(e)) => {
-                                warn!("Error while deserializing message key: {:?}", e);
-                                ""
-                            }
-                        };
-                        trace!(
-                            "message received: topic: {}, partition: {}, offset: {}, timestamp: {:?}",
-                            m.topic(),
-                            m.partition(),
-                            m.offset(),
-                            m.timestamp()
-                        );
-                        let headers = if let Some(headers) = m.headers() {
-                            let mut header_list: Vec<KrustHeader> = vec![];
-                            for header in headers.iter() {
-                                let h = KrustHeader {
-                                    key: header.key.to_string(),
-                                    value: header
-                                        .value
-                                        .map(|v| String::from_utf8(v.to_vec()).unwrap_or_default()),
-                                };
-                                header_list.push(h);
-                            }
-                            header_list
-                        } else {
-                            vec![]
-                        };
-                        let message = KrustMessage {
-                            topic: m.topic().to_string(),
-                            partition: m.partition(),
-                            offset: m.offset(),
-                            key: Some(key.to_string()),
-                            timestamp: m.timestamp().to_millis(),
-                            value: payload.to_string(),
-                            headers,
-                        };
-                        match tx.send(message).await {
-                            Err(e) => warn!(
-                                "consumer-{}::Problem sending message to writer: offset={}, {}",
-                                worker_id,
+                        let current_offset = m.offset();
+                        let current_partition = m.partition();
+                        let max_offset = *part_last_offset_map
+                            .get(&current_partition)
+                            .expect("should have partition last offset");
+                        if current_offset < max_offset {
+                            let payload = match m.payload_view::<str>() {
+                                None => "",
+                                Some(Ok(s)) => s,
+                                Some(Err(e)) => {
+                                    warn!("Error while deserializing message payload: {:?}", e);
+                                    ""
+                                }
+                            };
+                            let key = match m.key_view::<str>() {
+                                None => "",
+                                Some(Ok(s)) => s,
+                                Some(Err(e)) => {
+                                    warn!("Error while deserializing message key: {:?}", e);
+                                    ""
+                                }
+                            };
+                            trace!("message received: topic: {}, partition: {}, offset: {}, timestamp: {:?}",
+                                m.topic(),
+                                m.partition(),
                                 m.offset(),
-                                e
-                            ),
-                            Ok(_) => trace!(
-                                "consumer-{}::Message sent to writer: offset={}",
+                                m.timestamp());
+                            let headers = if let Some(headers) = m.headers() {
+                                let mut header_list: Vec<KrustHeader> = vec![];
+                                for header in headers.iter() {
+                                    let h = KrustHeader {
+                                        key: header.key.to_string(),
+                                        value: header.value.map(|v| {
+                                            String::from_utf8(v.to_vec()).unwrap_or_default()
+                                        }),
+                                    };
+                                    header_list.push(h);
+                                }
+                                header_list
+                            } else {
+                                vec![]
+                            };
+                            let message = KrustMessage {
+                                topic: m.topic().to_string(),
+                                partition: m.partition(),
+                                offset: m.offset(),
+                                key: Some(key.to_string()),
+                                timestamp: m.timestamp().to_millis(),
+                                value: payload.to_string(),
+                                headers,
+                            };
+                            match tx.send(message).await {
+                                Err(e) => warn!(
+                                    "consumer-{}::Problem sending message to writer: offset={}, {}",
+                                    worker_id,
+                                    m.offset(),
+                                    e
+                                ),
+                                Ok(_) => trace!(
+                                    "consumer-{}::Message sent to writer: offset={}",
+                                    worker_id,
+                                    m.offset()
+                                ),
+                            };
+                            let _local = local_counter.fetch_add(1, Ordering::SeqCst);
+                            let local = local_counter.load(Ordering::SeqCst);
+                            let _num = mcounter.fetch_add(1, Ordering::SeqCst);
+                            let num = mcounter.load(Ordering::SeqCst);
+
+                            trace!(
+                                "consumer-{}::{}/{} [partition={}, offset={}, max_offset={}]",
                                 worker_id,
-                                m.offset()
-                            ),
-                        };
-                        let _num = mcounter.fetch_add(1, Ordering::SeqCst);
-                        let num = mcounter.load(Ordering::SeqCst);
-                        trace!("consumer-{}::{}/{}", worker_id, num, total);
-                        if num >= total {
-                            break;
+                                num,
+                                total,
+                                current_partition,
+                                current_offset,
+                                max_offset
+                            );
+                            if num >= total {
+                                info!("consumer-{}::done::{}", worker_id, local);
+                                break;
+                            }
                         }
                     }
                 },
             };
         }
-        info!("{} finished", worker_id)
+        let c_val = local_counter.load(Ordering::SeqCst);
+        info!("consumer-{} finished: {}", worker_id, c_val);
+        std::mem::drop(tx);
     }
     pub async fn list_messages_for_topic(
         &self,

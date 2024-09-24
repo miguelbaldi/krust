@@ -414,9 +414,9 @@ impl Component for CacheManagerDialogModel {
                             cache_size_formatted,
                         );
                     }
-                    root.queue_allocate();
-                    root.present(parent);
                 }
+                root.queue_allocate();
+                root.present(parent);
             }
             CacheManagerDialogMsg::DeleteTopicCache {
                 connection_id,
@@ -434,6 +434,7 @@ impl Component for CacheManagerDialogModel {
                     let maybe_topic = worker.cleanup_messages(&MessagesCleanupRequest {
                         connection_id,
                         topic_name,
+                        refresh: true,
                     });
                     if let Some(_topic) = maybe_topic {
                         self.topics_wrapper.remove(idx);

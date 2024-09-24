@@ -69,7 +69,14 @@ fn main() -> Result<(), ()> {
     );
     // Call `gtk::init` manually because we instantiate GTK types in the app model.
     gtk::init().expect("should initialize GTK");
-
+    if let Some(settings) = gtk::Settings::default() {
+        info!(
+            "prefer dark theme?: {}",
+            settings.is_gtk_application_prefer_dark_theme()
+        );
+        //StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
+        //settings.set_gtk_application_prefer_dark_theme(true);
+    };
     info!("starting application: {}", APP_ID);
     initialize_resources();
     gtk::Window::set_default_icon_name(APP_ID);

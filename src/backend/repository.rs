@@ -8,7 +8,7 @@ use regex::Regex;
 use rusqlite::{named_params, params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use strum::EnumString;
-use tracing::warn;
+use tracing::*;
 
 use crate::component::task_manager::{Task, TaskManagerMsg, TASK_MANAGER_BROKER};
 use crate::config::{
@@ -53,10 +53,56 @@ pub struct Partition {
 pub struct KrustTopic {
     pub connection_id: Option<usize>,
     pub name: String,
-    pub cached: Option<i64>,
+    pub cached: Option<KrustTopicCache>,
     pub partitions: Vec<Partition>,
     pub total: Option<usize>,
     pub favourite: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, PartialOrd, Eq)]
+pub enum FetchMode {
+    #[default]
+    All,
+    Tail,
+    Head,
+    FromTimestamp,
+}
+
+impl ToString for FetchMode {
+    fn to_string(&self) -> String {
+        match self {
+            Self::All => "All".to_string(),
+            Self::Tail => "Newest".to_string(),
+            Self::Head => "Oldest".to_string(),
+            Self::FromTimestamp => "From date/time".to_string(),
+        }
+    }
+}
+
+impl FromStr for FetchMode {
+    type Err = ExternalError;
+    fn from_str(text: &str) -> Result<Self, ExternalError> {
+        match text {
+            "All" => Ok(Self::All),
+            "Newest" => Ok(Self::Tail),
+            "Oldest" => Ok(Self::Head),
+            "From date/time" => Ok(Self::FromTimestamp),
+            _ => Err(ExternalError::DisplayError(
+                "fetch mode not found".to_string(),
+                text.to_string(),
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, PartialOrd, Eq)]
+pub struct KrustTopicCache {
+    pub connection_id: usize,
+    pub topic_name: String,
+    pub fetch_mode: FetchMode,
+    pub fetch_value: Option<i64>,
+    pub default_page_size: u16,
+    pub last_updated: Option<i64>,
 }
 
 impl Display for KrustTopic {
@@ -323,12 +369,35 @@ impl Repository {
     }
 
     pub fn init(&mut self) -> Result<(), ExternalError> {
-        self.conn.execute_batch("
-        CREATE TABLE IF NOT EXISTS kr_connection(id INTEGER PRIMARY KEY, name TEXT UNIQUE, brokersList TEXT, securityType TEXT, saslMechanism TEXT, saslUsername TEXT, saslPassword TEXT);
-        CREATE TABLE IF NOT EXISTS kr_topic(connection_id INTEGER, name TEXT, cached INTEGER, PRIMARY KEY (connection_id, name), FOREIGN KEY (connection_id) REFERENCES kr_connection(id));
-        ").map_err(ExternalError::DatabaseError)?;
+        self.conn
+            .execute_batch(
+                "
+                CREATE TABLE IF NOT EXISTS kr_connection
+                (id INTEGER PRIMARY KEY,
+                name TEXT UNIQUE,
+                brokersList TEXT,
+                securityType TEXT,
+                saslMechanism TEXT,
+                saslUsername TEXT,
+                saslPassword TEXT);
+
+                CREATE TABLE IF NOT EXISTS kr_topic
+                (connection_id INTEGER,
+                name TEXT,
+                cached INTEGER,
+                PRIMARY KEY (connection_id, name),
+                FOREIGN KEY (connection_id) REFERENCES kr_connection(id));
+                ",
+            )
+            .map_err(ExternalError::DatabaseError)?;
         self.conn
             .execute_batch("ALTER TABLE kr_topic ADD COLUMN favourite INTEGER DEFAULT 0;")
+            .map_err(ExternalError::DatabaseError)
+            .unwrap_or_else(|e| {
+                warn!("kr_topic.favourite: {:?}", e);
+            });
+        self.conn
+            .execute_batch("ALTER TABLE kr_topic DROP COLUMN favorite;")
             .map_err(ExternalError::DatabaseError)
             .unwrap_or_else(|e| {
                 warn!("kr_topic.favourite: {:?}", e);
@@ -344,6 +413,50 @@ impl Repository {
             .map_err(ExternalError::DatabaseError)
             .unwrap_or_else(|e| {
                 warn!("kr_topic.timeout: {:?}", e);
+            });
+        self.conn
+            .execute_batch(
+                "
+                PRAGMA foreign_keys=off;
+                BEGIN TRANSACTION;
+                ALTER TABLE kr_topic RENAME TO _kr_topic_old;
+                CREATE TABLE IF NOT EXISTS kr_topic
+                    (connection_id INTEGER,
+                    name TEXT,
+                    cached INTEGER,
+                    favourite INTEGER DEFAULT 0,
+                    PRIMARY KEY (connection_id, name),
+                    FOREIGN KEY (connection_id) REFERENCES kr_connection(id) ON DELETE CASCADE);
+                INSERT INTO kr_topic SELECT * FROM _kr_topic_old;
+                COMMIT;
+                PRAGMA foreign_keys=on;
+                ",
+            )
+            .map_err(ExternalError::DatabaseError)
+            .unwrap_or_else(|e| {
+                warn!("kr_topic.connection_id (FK DELETE CASCADE): {:?}", e);
+            });
+        info!("repository::create kr_topic_cache");
+        self.conn
+            .execute_batch(
+                "
+                ROLLBACK;
+                BEGIN;
+                CREATE TABLE IF NOT EXISTS kr_topic_cache
+                   (connection_id INTEGER,
+                    topic_name TEXT,
+                    fetch_mode TEXT,
+                    last_updated INTEGER,
+                    fetch_value INTEGER,
+                    default_page_size INTEGER,
+                    PRIMARY KEY (connection_id, topic_name),
+                    FOREIGN KEY (connection_id, topic_name) REFERENCES kr_topic(connection_id, name) ON DELETE CASCADE);
+                COMMIT;
+                ",
+            )
+            .map_err(ExternalError::DatabaseError)
+            .unwrap_or_else(|e| {
+                warn!("kr_topic_cache: {:?}", e);
             });
         Ok(())
     }
@@ -541,19 +654,18 @@ impl Repository {
         topic: &KrustTopic,
     ) -> Result<KrustTopic, ExternalError> {
         let name = topic.name.clone();
-        let cached = topic.cached;
         let favourite = topic.favourite;
         let mut stmt_by_id = self.conn.prepare_cached(
-            "INSERT INTO kr_topic(connection_id, name, cached, favourite)
-            VALUES (:cid, :topic, :cached, :favourite)
+            "INSERT INTO kr_topic(connection_id, name, favourite)
+            VALUES (:cid, :topic, :favourite)
             ON CONFLICT(connection_id, name)
-            DO UPDATE SET cached=excluded.cached, favourite=excluded.favourite",
+            DO UPDATE SET favourite=excluded.favourite",
         )?;
         let row_to_model = move |_| {
             Ok(KrustTopic {
                 connection_id: Some(conn_id),
                 name: topic.name.clone(),
-                cached,
+                cached: None,
                 partitions: vec![],
                 total: None,
                 favourite,
@@ -562,8 +674,73 @@ impl Repository {
 
         stmt_by_id
             .execute(
-                named_params! { ":cid": &conn_id, ":topic": &name.clone(), ":cached": &cached, ":favourite": &favourite },
+                named_params! { ":cid": &conn_id, ":topic": &name.clone(), ":favourite": &favourite },
             )
+            .map(row_to_model)?
+            .map_err(ExternalError::DatabaseError)
+    }
+
+    pub fn save_topic_cache(
+        &mut self,
+        conn_id: usize,
+        topic_name: String,
+        cache: &KrustTopicCache,
+    ) -> Result<KrustTopicCache, ExternalError> {
+        info!("[save_topic_cache] saving topic cache::{:?}", cache);
+        let fetch_mode = cache.fetch_mode;
+        let last_updated = cache.last_updated;
+        let default_page_size = cache.default_page_size;
+        let fetch_value = cache.fetch_value;
+
+        let topic = self.find_topic(conn_id, &topic_name);
+        if topic.is_none() {
+            info!("[save_topic_cache] creating topic for cache::{:?}", cache);
+            let saved = self
+                .save_topic(
+                    conn_id,
+                    &KrustTopic {
+                        connection_id: Some(conn_id),
+                        name: topic_name.clone(),
+                        cached: None,
+                        partitions: vec![],
+                        total: None,
+                        favourite: Some(false),
+                    },
+                )
+                .expect("[save_topic_cache] should save topic for cache");
+            info!("[save_topic_cache] topic created::{:?}", saved);
+        };
+
+        let mut stmt_by_id = self.conn.prepare_cached(
+            "INSERT INTO kr_topic_cache(connection_id, topic_name, fetch_mode, fetch_value, last_updated, default_page_size)
+            VALUES (:cid, :topic, :fetch_mode, :fetch_value, :last_updated, :default_page_size)
+            ON CONFLICT(connection_id, topic_name)
+            DO UPDATE SET
+                            fetch_mode=excluded.fetch_mode,
+                            fetch_value=excluded.fetch_value,
+                            last_updated=excluded.last_updated,
+                            default_page_size=excluded.default_page_size",
+        )?;
+        let t_name = topic_name.clone();
+        let row_to_model = move |_| {
+            Ok(KrustTopicCache {
+                connection_id: conn_id,
+                topic_name: t_name.clone(),
+                fetch_mode,
+                fetch_value,
+                last_updated,
+                default_page_size,
+            })
+        };
+
+        stmt_by_id
+            .execute(named_params! {
+            ":cid": &conn_id,
+            ":topic": topic_name.clone(),
+            ":fetch_mode": &fetch_mode.to_string(),
+            ":fetch_value": &fetch_value,
+            ":last_updated": &last_updated,
+            ":default_page_size": &default_page_size })
             .map(row_to_model)?
             .map_err(ExternalError::DatabaseError)
     }
@@ -585,26 +762,70 @@ impl Repository {
             .map_err(ExternalError::DatabaseError)
     }
 
+    pub fn delete_topic_cache(
+        &mut self,
+        conn_id: usize,
+        topic_name: String,
+    ) -> Result<usize, ExternalError> {
+        let mut stmt_by_id = self.conn.prepare_cached(
+            "DELETE FROM kr_topic_cache
+            WHERE connection_id = :cid
+            AND topic_name = :topic",
+        )?;
+
+        stmt_by_id
+            .execute(named_params! { ":cid": &conn_id, ":topic": &topic_name.clone(),})
+            .map_err(ExternalError::DatabaseError)
+    }
+
     pub fn delete_connection(&mut self, conn_id: usize) -> Result<usize, ExternalError> {
         let mut stmt_by_id = self.conn.prepare_cached(
             "DELETE FROM kr_connection
             WHERE id = :cid",
         )?;
-        let mut topics_stmt_by_id = self.conn.prepare_cached(
-            "DELETE FROM kr_topic
-            WHERE connection_id = :cid",
-        )?;
-        topics_stmt_by_id
-            .execute(named_params! { ":cid": &conn_id,})
-            .map_err(ExternalError::DatabaseError)?;
         stmt_by_id
             .execute(named_params! { ":cid": &conn_id,})
             .map_err(ExternalError::DatabaseError)
     }
 
+    pub fn find_topic_cache(
+        &mut self,
+        conn_id: usize,
+        topic_name: &String,
+    ) -> Option<KrustTopicCache> {
+        let stmt = self.conn.prepare_cached(
+            "
+            SELECT
+                connection_id,
+                topic_name,
+                fetch_mode,
+                fetch_value,
+                last_updated,
+                default_page_size
+            FROM kr_topic_cache WHERE connection_id = :cid AND topic_name = :topic",
+        );
+        stmt.ok()?
+            .query_row(
+                named_params! {":cid": &conn_id, ":topic": &topic_name },
+                |row| {
+                    Ok(KrustTopicCache {
+                        connection_id: row.get(0)?,
+                        topic_name: row.get(1)?,
+                        fetch_mode: FetchMode::from_str(row.get::<usize, String>(2)?.as_str())
+                            .unwrap_or_default(),
+                        fetch_value: row.get(3)?,
+                        last_updated: row.get(4)?,
+                        default_page_size: row.get(5)?,
+                    })
+                },
+            )
+            .ok()
+    }
+
     pub fn find_topic(&mut self, conn_id: usize, topic_name: &String) -> Option<KrustTopic> {
+        let cache = self.find_topic_cache(conn_id, topic_name);
         let stmt = self.conn
-        .prepare_cached("SELECT connection_id, name, cached, favourite FROM kr_topic WHERE connection_id = :cid AND name = :topic");
+        .prepare_cached("SELECT connection_id, name, favourite FROM kr_topic WHERE connection_id = :cid AND name = :topic");
         stmt.ok()?
             .query_row(
                 named_params! {":cid": &conn_id, ":topic": &topic_name },
@@ -612,10 +833,10 @@ impl Repository {
                     Ok(KrustTopic {
                         connection_id: row.get(0)?,
                         name: row.get(1)?,
-                        cached: row.get(2)?,
+                        cached: cache.clone(),
                         partitions: vec![],
                         total: None,
-                        favourite: row.get(3)?,
+                        favourite: row.get(2)?,
                     })
                 },
             )
@@ -625,17 +846,18 @@ impl Repository {
         &mut self,
         conn_id: usize,
     ) -> Result<Vec<KrustTopic>, ExternalError> {
-        let mut stmt = self.conn
-        .prepare_cached("SELECT connection_id, name, cached, favourite FROM kr_topic WHERE connection_id = :cid")?;
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT connection_id, name, favourite FROM kr_topic WHERE connection_id = :cid",
+        )?;
         let rows = stmt
             .query_and_then(named_params! {":cid": &conn_id }, |row| {
                 Ok::<KrustTopic, rusqlite::Error>(KrustTopic {
                     connection_id: row.get(0)?,
                     name: row.get(1)?,
-                    cached: row.get(2)?,
+                    cached: None,
                     partitions: vec![],
                     total: None,
-                    favourite: row.get(3)?,
+                    favourite: row.get(2)?,
                 })
             })
             .map_err(ExternalError::DatabaseError)?;

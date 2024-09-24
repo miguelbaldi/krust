@@ -58,7 +58,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           prerelease: false
-          draft: false
+          draft: true 
           generate_release_notes: true
           append_body: true
           files: |

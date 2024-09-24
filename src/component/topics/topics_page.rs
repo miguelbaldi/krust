@@ -1,6 +1,9 @@
 use crate::{
     backend::repository::{KrustConnection, KrustTopic},
-    component::topics::topics_tab::{TopicsTabInit, TopicsTabOutput},
+    component::{
+        colorize_widget_by_connection, get_tab_by_title,
+        topics::topics_tab::{TopicsTabInit, TopicsTabOutput},
+    },
 };
 use adw::{prelude::*, TabPage};
 use relm4::{actions::RelmAction, factory::FactoryVecDeque, *};
@@ -178,10 +181,15 @@ impl Component for TopicsPageModel {
             }
             TopicsPageMsg::PageAdded(page, index) => {
                 let tab_model = self.topics.get(index.try_into().unwrap()).unwrap();
+                let conn = tab_model.current.clone().unwrap();
                 let title = tab_model.current.clone().unwrap().name;
                 page.set_title(title.as_str());
                 page.set_live_thumbnail(true);
+                let maybe_tab = get_tab_by_title(&widgets.topics_tabs, title);
 
+                if let Some(tab) = maybe_tab {
+                    colorize_widget_by_connection(&conn, tab);
+                }
                 widgets.topics_viewer.set_selected_page(&page);
             }
             TopicsPageMsg::MenuPagePin => {

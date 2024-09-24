@@ -1,6 +1,6 @@
 use chrono::Utc;
 use tokio::select;
-use tracing::{info, warn};
+use tracing::*;
 
 use crate::{
     component::{
@@ -12,9 +12,10 @@ use crate::{
 };
 
 use super::{
-    kafka::{KafkaBackend, KafkaFetch},
+    kafka::{CacheMessagesRequest, KafkaBackend, KafkaFetch},
     repository::{
-        KrustConnection, KrustMessage, KrustTopic, MessagesRepository, MessagesSearchOrder,
+        FetchMode, KrustConnection, KrustMessage, KrustTopic, KrustTopicCache, MessagesRepository,
+        MessagesSearchOrder,
     },
 };
 
@@ -39,6 +40,7 @@ pub struct MessagesRequest {
     pub search: Option<String>,
     pub fetch: KafkaFetch,
     pub max_messages: i64,
+    pub cache: Option<KrustTopicCache>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +56,7 @@ pub struct MessagesResponse {
 pub struct MessagesCleanupRequest {
     pub connection_id: usize,
     pub topic_name: String,
+    pub refresh: bool,
 }
 
 pub struct MessagesTotalCounterRequest {
@@ -71,35 +74,35 @@ impl MessagesWorker {
     pub fn cleanup_messages(self, request: &MessagesCleanupRequest) -> Option<KrustTopic> {
         let mut repo = Repository::new();
         let conn_id = request.connection_id;
+        let mut mrepo = MessagesRepository::new(conn_id, &request.topic_name);
+        let destroy_result = mrepo.destroy();
+        match destroy_result {
+            Ok(_) => info!("cache destroyed on disk"),
+            Err(e) => warn!("unable to destroy cache on disk: {:?}", e),
+        };
         let has_topic = repo.find_topic(conn_id, &request.topic_name);
         match has_topic {
-            Some(mut topic) => {
-                let mut mrepo = MessagesRepository::new(conn_id, &topic.name);
-                let destroy_result = mrepo.destroy();
-                topic.cached = None;
-                match destroy_result {
-                    Ok(_) => {
-                        let save_result = repo.save_topic(conn_id, &topic);
-                        match save_result {
-                            Ok(r) => {
-                                info!("topic cache destroyed: {}", r);
-                                MESSAGES_PAGE_BROKER.send(MessagesPageMsg::RefreshTopicTab {
-                                    connection_id: conn_id,
-                                    topic_name: topic.name.clone(),
-                                });
-                            }
-                            Err(e) => warn!("unable to update topic: {:?}", e),
-                        };
-                        Some(topic)
+            Some(topic) => {
+                let save_result = repo.delete_topic_cache(conn_id, topic.name.clone());
+                match save_result {
+                    Ok(r) => {
+                        info!("topic cache destroyed: {}", r);
+                        if request.refresh {
+                            MESSAGES_PAGE_BROKER.send(MessagesPageMsg::RefreshTopicTab {
+                                connection_id: conn_id,
+                                topic_name: topic.name.clone(),
+                            });
+                        }
+                        repo.find_topic(conn_id, &topic.name)
                     }
                     Err(e) => {
-                        warn!("unable to destroy cache: {:?}", e);
-                        Some(topic)
+                        warn!("unable to update topic: {:?}", e);
+                        None
                     }
                 }
             }
             None => {
-                info!("nothing to cleanup");
+                info!("nothing to cleanup on database");
                 None
             }
         }
@@ -158,53 +161,61 @@ impl MessagesWorker {
         request: &MessagesRequest,
     ) -> Result<MessagesResponse, ExternalError> {
         let task = request.task.clone().unwrap();
+        let topic = request.topic.clone();
+        let cached = request.cache.clone();
         let refresh = match request.mode {
             MessagesMode::Live => false,
             MessagesMode::Cached { refresh } => refresh,
         };
-        let cached = if refresh {
+        let cached_ts = if refresh {
             Some(Utc::now().timestamp_millis())
         } else {
-            request.topic.cached.or(Some(Utc::now().timestamp_millis()))
+            cached
+                .clone()
+                .map(|c| c.last_updated.unwrap_or(Utc::now().timestamp_millis()))
+                .or(Some(Utc::now().timestamp_millis()))
+        };
+        let cached = if let Some(cached) = cached {
+            KrustTopicCache {
+                connection_id: cached.connection_id,
+                topic_name: cached.topic_name,
+                fetch_mode: cached.fetch_mode,
+                fetch_value: cached.fetch_value,
+                default_page_size: cached.default_page_size,
+                last_updated: cached_ts,
+            }
+        } else {
+            KrustTopicCache {
+                connection_id: request.connection.id.unwrap(),
+                topic_name: topic.name.clone(),
+                fetch_mode: FetchMode::default(),
+                fetch_value: None,
+                default_page_size: 0,
+                last_updated: cached_ts,
+            }
         };
         let kafka = KafkaBackend::new(&request.connection);
         let mut repo = Repository::new();
+
         let topic_name = &request.topic.name;
-        let topic = KrustTopic {
-            connection_id: request.topic.connection_id,
-            name: request.topic.name.clone(),
-            cached,
-            partitions: vec![],
-            total: None,
-            favourite: request.topic.favourite,
-        };
-        let topic = repo.save_topic(
+        let current_cache = repo.find_topic_cache(
             topic.connection_id.expect("should have connection id"),
-            &topic,
-        )?;
+            topic_name,
+        );
+
         // Run async background task
         let mut mrepo = MessagesRepository::new(topic.connection_id.unwrap(), &topic.name);
-        let total = match request.topic.cached {
+        let total = match current_cache {
             Some(_) => {
                 if refresh {
-                    let partitions = mrepo.find_offsets().ok();
-                    let topic = kafka
-                        .topic_message_count(&topic.name, None, None, partitions.clone())
-                        .await;
-                    let partitions = topic.partitions.clone();
-                    let total = topic.total.unwrap_or_default();
-                    info!("cache refresh [total={}]", total);
-                    kafka
-                        .cache_messages_for_topic(
-                            task.clone(),
-                            topic_name,
-                            total,
-                            &mrepo,
-                            Some(partitions),
-                            Some(KafkaFetch::Newest),
-                        )
-                        .await
-                        .unwrap();
+                    let cache_request = CacheMessagesRequest {
+                        cache_settings: cached.clone(),
+                        task: task.clone(),
+                        messages_repository: &mrepo,
+                        refresh: true,
+                    };
+                    kafka.cache_messages(&cache_request).await.unwrap();
+                    info!("cache refreshed");
                 }
                 mrepo
                     .count_messages(request.search.clone())
@@ -219,27 +230,32 @@ impl MessagesWorker {
 
                 mrepo.init().unwrap();
                 if total > 0 {
-                    kafka
-                        .cache_messages_for_topic(
-                            task.clone(),
-                            topic_name,
-                            total,
-                            &mrepo,
-                            Some(mtopic.partitions),
-                            Some(KafkaFetch::Oldest),
-                        )
-                        .await
-                        .unwrap();
+                    let cache_request = CacheMessagesRequest {
+                        cache_settings: cached.clone(),
+                        task: task.clone(),
+                        messages_repository: &mrepo,
+                        refresh: false,
+                    };
+                    kafka.cache_messages(&cache_request).await.unwrap();
                 }
-                if request.search.clone().is_some() {
-                    mrepo
-                        .count_messages(request.search.clone())
-                        .unwrap_or_default()
-                } else {
-                    total
-                }
+                mrepo
+                    .count_messages(request.search.clone())
+                    .unwrap_or_default()
             }
         };
+
+        let save_cache_result =
+            repo.save_topic_cache(topic.connection_id.unwrap(), topic.name.clone(), &cached);
+        match save_cache_result {
+            Ok(_) => info!("topic cache settings saved!"),
+            Err(e) => error!("error saving topic cache settings: {}", e),
+        }
+        let topic = repo
+            .find_topic(
+                topic.connection_id.expect("should have connection id"),
+                topic_name,
+            )
+            .unwrap();
         let messages = mrepo
             .find_messages_paged(
                 task.clone(),
