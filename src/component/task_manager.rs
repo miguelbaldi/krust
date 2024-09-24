@@ -383,11 +383,7 @@ impl Component for TaskManagerModel {
                     let progress = &mut item.progress;
                     let mut guard = progress.guard();
                     *guard = step;
-                    trace!(
-                        "task_manager::progress::received::{}={}",
-                        item.value.id,
-                        *guard
-                    );
+
                     if *guard >= 1.0 {
                         sender.input(TaskManagerMsg::RemoveTask(task.clone()));
                     }
@@ -412,7 +408,7 @@ impl Component for TaskManagerModel {
                 }
                 sender.oneshot_command(async move {
                     sleep(Duration::from_secs(2)).await;
-                    trace!("removing task with index: {}", task.id);
+                    debug!("removing task with index: {}", task.id);
                     TaskManagerCommand::RemoveTask(task.clone())
                 });
             }

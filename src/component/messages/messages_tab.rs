@@ -539,7 +539,7 @@ impl FactoryComponent for MessagesTabModel {
             .detach();
         let cache_settings_dialog = MessagesCacheSettingsDialogModel::builder()
             //.transient_for(main_application())
-            .launch((open.connection.clone(), open.topic.clone()))
+            .launch((open.connection.clone(), Some(open.topic.clone())))
             .forward(sender.input_sender(), |msg| match msg {
                 MessagesCacheSettingsDialogOutput::Update(cache) => {
                     MessagesTabMsg::UpdateCacheSettings(cache)

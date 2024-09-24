@@ -2,7 +2,7 @@ use core::f64;
 use std::str::FromStr;
 
 use adw::{prelude::*, AlertDialog};
-use chrono::{Datelike, Local, NaiveDateTime, TimeZone, Timelike, Utc};
+use chrono::{Local, NaiveDateTime, TimeZone, Timelike, Utc};
 use chrono_tz::America;
 use copypasta::{ClipboardContext, ClipboardProvider};
 use gtk::Adjustment;
@@ -21,8 +21,9 @@ use crate::{AppMsg, Repository, DATE_TIME_FORMAT, TOASTER_BROKER};
 const DEFAULT_MESSAGES_PER_PARTITION: usize = 10000;
 
 pub struct MessagesCacheSettingsDialogModel {
+    pub readonly: bool,
     pub connection: KrustConnection,
-    pub topic: KrustTopic,
+    pub topic: Option<KrustTopic>,
     pub default_page_size_combo: Controller<SimpleComboRow<u16>>,
     pub selected_fetch_mode: Option<FetchMode>,
     pub selected_default_page_size: Option<u16>,
@@ -33,6 +34,7 @@ pub struct MessagesCacheSettingsDialogModel {
 #[derive(Debug)]
 pub enum MessagesCacheSettingsDialogMsg {
     Show,
+    ShowReadonly { topic_name: String },
     DefaultPageSizeSelected(usize),
     FetchModeSelected(FetchMode),
     ApplySettings,
@@ -40,6 +42,7 @@ pub enum MessagesCacheSettingsDialogMsg {
     Ignore,
     RefreshTopicMessagesCounter,
     CopyToClipboard(String),
+    SetCacheTimestamp,
 }
 
 #[derive(Debug)]
@@ -52,9 +55,15 @@ pub enum AsyncCommandOutput {
     RefreshTopicMessagesCounter(KrustTopic),
 }
 
+impl Drop for MessagesCacheSettingsDialogModel {
+    fn drop(&mut self) {
+        debug!("MessagesCacheSettingsDialogModel dropped.");
+    }
+}
+
 #[relm4::component(pub)]
 impl Component for MessagesCacheSettingsDialogModel {
-    type Init = (KrustConnection, KrustTopic);
+    type Init = (KrustConnection, Option<KrustTopic>);
     type Input = MessagesCacheSettingsDialogMsg;
     type Output = MessagesCacheSettingsDialogOutput;
     type CommandOutput = AsyncCommandOutput;
@@ -152,7 +161,8 @@ impl Component for MessagesCacheSettingsDialogModel {
                         default_page_size_combo -> adw::ComboRow {
                             set_title: "Default page size",
                             set_subtitle: "Set default page size for cache pagination",
-                            set_visible: true,
+                            #[watch]
+                            set_sensitive: !model.readonly,
                         },
                         adw::ActionRow {
                             set_title: "Fetch mode",
@@ -165,6 +175,8 @@ impl Component for MessagesCacheSettingsDialogModel {
                                 set_vexpand: true,
                                 set_valign: gtk::Align::Fill,
                                 set_halign: gtk::Align::Fill,
+                                #[watch]
+                                set_sensitive: !model.readonly,
                             },
                         },
 
@@ -192,6 +204,8 @@ impl Component for MessagesCacheSettingsDialogModel {
                                     set_numeric: true,
                                     set_update_policy: gtk::SpinButtonUpdatePolicy::IfValid,
                                     set_adjustment = Some(&offset_adjustment),
+                                    #[watch]
+                                    set_sensitive: !model.readonly,
                             } -> {
                                 set_title: FetchMode::Head.to_string().as_str(),
                                 set_name: FetchMode::Head.to_string().as_str(),
@@ -203,6 +217,8 @@ impl Component for MessagesCacheSettingsDialogModel {
                                     set_numeric: true,
                                     set_update_policy: gtk::SpinButtonUpdatePolicy::IfValid,
                                     set_adjustment = Some(&offset_adjustment),
+                                    #[watch]
+                                    set_sensitive: !model.readonly,
                             } -> {
                                 set_title: FetchMode::Tail.to_string().as_str(),
                                 set_name: FetchMode::Tail.to_string().as_str(),
@@ -218,6 +234,8 @@ impl Component for MessagesCacheSettingsDialogModel {
                                             set_valign: gtk::Align::Center,
                                             set_editable: false,
                                             set_max_width_chars: 10,
+                                            #[watch]
+                                            set_sensitive: !model.readonly,
                                         },
                                         gtk::MenuButton {
                                             set_tooltip_text: Some("Show calendar"),
@@ -230,13 +248,10 @@ impl Component for MessagesCacheSettingsDialogModel {
                                                 set_position: gtk::PositionType::Bottom,
                                                 #[wrap(Some)]
                                                 set_child: calendar = &gtk::Calendar {
-                                                    connect_day_selected[formatted_date] => move |calendar| {
-                                                        let date = calendar.date();
-                                                        let year = date.year();
-                                                        let month = date.month();
-                                                        let day = date.day_of_month();
-                                                        let date_fmt = format!("{:02}/{:02}/{}", day, month, year);
-                                                        formatted_date.set_text(date_fmt.as_str());
+                                                    #[watch]
+                                                    set_sensitive: !model.readonly,
+                                                    connect_day_selected[sender] => move |_calendar| {
+                                                        sender.input(MessagesCacheSettingsDialogMsg::SetCacheTimestamp);
                                                     },
                                                 },
                                             },
@@ -251,6 +266,8 @@ impl Component for MessagesCacheSettingsDialogModel {
                                             set_increments: (1.0, 1.0),
                                             set_range: (0.0, 23.0),
                                             set_digits: 0,
+                                            #[watch]
+                                            set_sensitive: !model.readonly,
                                         },
                                         gtk::Label { set_label: ":", set_margin_start: 2, set_margin_end: 2, },
                                         #[name(time_minutes)]
@@ -263,6 +280,8 @@ impl Component for MessagesCacheSettingsDialogModel {
                                             set_increments: (1.0, 1.0),
                                             set_range: (0.0, 59.0),
                                             set_digits: 0,
+                                            #[watch]
+                                            set_sensitive: !model.readonly,
                                         },
                                         gtk::Label { set_label: ":", set_margin_start: 2, set_margin_end: 2, },
                                         #[name(time_seconds)]
@@ -275,6 +294,8 @@ impl Component for MessagesCacheSettingsDialogModel {
                                             set_increments: (1.0, 1.0),
                                             set_range: (0.0, 59.0),
                                             set_digits: 0,
+                                            #[watch]
+                                            set_sensitive: !model.readonly,
                                         },
                                     },
                             } -> {
@@ -293,6 +314,8 @@ impl Component for MessagesCacheSettingsDialogModel {
                             set_label: "Apply",
                             add_css_class: "suggested-action",
                             set_margin_top: 4,
+                            #[watch]
+                            set_visible: !model.readonly,
                             connect_clicked => MessagesCacheSettingsDialogMsg::ApplySettings,
                         },
                     }
@@ -334,6 +357,7 @@ impl Component for MessagesCacheSettingsDialogModel {
         let clipboard = Box::new(ClipboardContext::new().unwrap());
         info!("init::[connection={:?}, topic={:?}]", &connection, &topic);
         let model = MessagesCacheSettingsDialogModel {
+            readonly: false,
             connection,
             topic,
             default_page_size_combo,
@@ -364,81 +388,107 @@ impl Component for MessagesCacheSettingsDialogModel {
         debug!("received message: {:?}", msg);
 
         match msg {
+            MessagesCacheSettingsDialogMsg::ShowReadonly { topic_name } => {
+                self.readonly = true;
+                let conn_id = self.connection.id.expect("should have connection");
+                let mut repo = Repository::new();
+                let maybe_topic = repo.find_topic(conn_id, &topic_name);
+                self.topic = maybe_topic.clone();
+                if maybe_topic.is_some() {
+                    sender.input(MessagesCacheSettingsDialogMsg::Show);
+                }
+            }
+            MessagesCacheSettingsDialogMsg::SetCacheTimestamp => {
+                let date = widgets.calendar.date();
+                let year = date.year();
+                let month = date.month();
+                let day = date.day_of_month();
+                let date_fmt = format!("{:02}/{:02}/{}", day, month, year);
+                widgets.formatted_date.set_text(date_fmt.as_str());
+            }
             MessagesCacheSettingsDialogMsg::Show => {
                 let connection = self.connection.clone();
                 let conn_id = connection.id.unwrap();
                 let mut repository = Repository::new();
 
-                widgets.status_topic_name.set_title(&self.topic.name);
-
-                let cached = repository.find_topic_cache(conn_id, &self.topic.name);
-
-                let default_page_size_idx = cached
-                    .clone()
-                    .map(|c| c.default_page_size as u32)
-                    .unwrap_or_default();
-                let fetch_mode = cached.clone().map(|c| c.fetch_mode).unwrap_or_default();
-                let fetch_value = cached
-                    .clone()
-                    .and_then(|c| c.fetch_value)
-                    .unwrap_or_default();
-                info!(
-                    "settings fetch mode {}, with default page size index::{}",
-                    fetch_mode.to_string(),
-                    default_page_size_idx
-                );
-
-                match fetch_mode {
-                    FetchMode::Head => {
-                        widgets.first_n_messages.set_value(fetch_value as f64);
+                if let Some(topic) = self.topic.clone() {
+                    widgets.status_topic_name.set_title(&topic.name);
+                    if !&topic.partitions.is_empty() {
+                        widgets
+                            .status_topic_partitions
+                            .set_title(&topic.partitions.len().to_string());
                     }
-                    FetchMode::Tail => {
-                        widgets.last_n_messages.set_value(fetch_value as f64);
-                    }
-                    FetchMode::All => (),
-                    FetchMode::FromTimestamp => {
-                        let date_time = Utc
-                            .timestamp_millis_opt(fetch_value)
-                            .unwrap()
-                            .with_timezone(&America::Sao_Paulo);
-                        let day = date_time.day();
-                        let month = date_time.month();
-                        let year = date_time.year();
-                        widgets.calendar.set_day(day as i32);
-                        widgets.calendar.set_month(month as i32);
-                        widgets.calendar.set_year(year);
-                        let hours = date_time.hour();
-                        let minutes = date_time.minute();
-                        let seconds = date_time.second();
-                        widgets.time_hours.set_value(hours as f64);
-                        widgets.time_minutes.set_value(minutes as f64);
-                        widgets.time_seconds.set_value(seconds as f64);
-                    }
+
+                    let cached = repository.find_topic_cache(conn_id, &topic.name);
+
+                    let default_page_size_idx = cached
+                        .clone()
+                        .map(|c| c.default_page_size as u32)
+                        .unwrap_or_default();
+                    let fetch_mode = cached.clone().map(|c| c.fetch_mode).unwrap_or_default();
+                    let fetch_value = cached
+                        .clone()
+                        .and_then(|c| c.fetch_value)
+                        .unwrap_or_default();
+                    info!(
+                        "settings fetch mode {}, with default page size index::{}",
+                        fetch_mode.to_string(),
+                        default_page_size_idx
+                    );
+
+                    match fetch_mode {
+                        FetchMode::Head => {
+                            widgets.first_n_messages.set_value(fetch_value as f64);
+                        }
+                        FetchMode::Tail => {
+                            widgets.last_n_messages.set_value(fetch_value as f64);
+                        }
+                        FetchMode::All => (),
+                        FetchMode::FromTimestamp => {
+                            let date_time = Utc
+                                .timestamp_millis_opt(fetch_value)
+                                .unwrap()
+                                .with_timezone(&America::Sao_Paulo);
+                            let date = gtk::glib::DateTime::from_unix_utc(date_time.timestamp())
+                                .expect("glib DateTime from Utc");
+                            widgets.calendar.select_day(&date);
+                            let hours = date_time.hour();
+                            let minutes = date_time.minute();
+                            let seconds = date_time.second();
+                            widgets.time_hours.set_value(hours as f64);
+                            widgets.time_minutes.set_value(minutes as f64);
+                            widgets.time_seconds.set_value(seconds as f64);
+                        }
+                    };
+                    widgets
+                        .default_page_size_combo
+                        .set_selected(default_page_size_idx);
+                    widgets
+                        .fetch_mode_stack
+                        .set_visible_child_name(&fetch_mode.to_string());
+                    sender.input(MessagesCacheSettingsDialogMsg::SetCacheTimestamp);
+                    sender.input(MessagesCacheSettingsDialogMsg::RefreshTopicMessagesCounter);
+
+                    let parent = &relm4::main_application().active_window().unwrap();
+                    root.queue_allocate();
+                    root.present(parent);
                 };
-                widgets
-                    .default_page_size_combo
-                    .set_selected(default_page_size_idx);
-                widgets
-                    .fetch_mode_stack
-                    .set_visible_child_name(&fetch_mode.to_string());
-                sender.input(MessagesCacheSettingsDialogMsg::RefreshTopicMessagesCounter);
-
-                let parent = &relm4::main_application().active_window().unwrap();
-                root.queue_allocate();
-                root.present(parent);
             }
             MessagesCacheSettingsDialogMsg::RefreshTopicMessagesCounter => {
+                info!("refresh topic messages counter");
                 let connection = self.connection.clone();
                 let topic = self.topic.clone();
-                let topic_name = topic.name.clone();
-                let kafka = KafkaBackend::new(&connection);
+                if let Some(topic) = topic {
+                    let topic_name = topic.name.clone();
+                    let kafka = KafkaBackend::new(&connection);
 
-                sender.oneshot_command(async move {
-                    let topic = kafka
-                        .topic_message_count(&topic_name, Some(KafkaFetch::Oldest), None, None)
-                        .await;
-                    AsyncCommandOutput::RefreshTopicMessagesCounter(topic)
-                });
+                    sender.oneshot_command(async move {
+                        let topic = kafka
+                            .topic_message_count(&topic_name, Some(KafkaFetch::Oldest), None, None)
+                            .await;
+                        AsyncCommandOutput::RefreshTopicMessagesCounter(topic)
+                    });
+                }
             }
             MessagesCacheSettingsDialogMsg::CopyToClipboard(text) => {
                 let id = Uuid::new_v4();
@@ -464,68 +514,72 @@ impl Component for MessagesCacheSettingsDialogModel {
                 let connection = self.connection.clone();
                 let conn_id = connection.id.unwrap();
                 let topic = self.topic.clone();
-                let topic_name = &topic.name;
-                info!(
-                    "getting updated topic[connection_id={}, topic_name={}]",
-                    &conn_id, &topic_name
-                );
-                let updated_cache = repo.find_topic_cache(conn_id, topic_name);
-                if let Some(cache) = updated_cache.clone() {
-                    debug!("already has cache, asking for confirmation::{:?}", &cache);
-                    self.confirmation_alert.present(&widgets.main_dialog);
-                } else {
-                    sender.input(MessagesCacheSettingsDialogMsg::ConfirmApplySettings);
+                if let Some(topic) = topic {
+                    let topic_name = &topic.name;
+                    info!(
+                        "getting updated topic[connection_id={}, topic_name={}]",
+                        &conn_id, &topic_name
+                    );
+                    let updated_cache = repo.find_topic_cache(conn_id, topic_name);
+                    if let Some(cache) = updated_cache.clone() {
+                        debug!("already has cache, asking for confirmation::{:?}", &cache);
+                        self.confirmation_alert.present(&widgets.main_dialog);
+                    } else {
+                        sender.input(MessagesCacheSettingsDialogMsg::ConfirmApplySettings);
+                    }
                 }
             }
             MessagesCacheSettingsDialogMsg::ConfirmApplySettings => {
                 let worker = MessagesWorker::new();
                 let connection_id = self.connection.id.unwrap();
-                let topic_name = self.topic.name.clone();
-                info!(
-                    "Confirm settings[connection={:?}, topic={:?}]...",
-                    &connection_id, &topic_name
-                );
-                worker.cleanup_messages(&MessagesCleanupRequest {
-                    connection_id,
-                    topic_name: topic_name.clone(),
-                    refresh: false,
-                });
-                let fetch_value = match self.selected_fetch_mode {
-                    Some(FetchMode::FromTimestamp) => {
-                        let date_text = widgets.formatted_date.text().to_string();
-                        let hours = widgets.time_hours.value_as_int();
-                        let minutes = widgets.time_minutes.value_as_int();
-                        let seconds = widgets.time_seconds.value_as_int();
-                        let date_time_formatted =
-                            format!("{} {:02}:{:02}:{:02}", date_text, hours, minutes, seconds);
-                        let date_time = NaiveDateTime::parse_from_str(
-                            date_time_formatted.as_str(),
-                            DATE_TIME_FORMAT,
-                        );
-                        let now = Local::now();
-                        let offset = now.offset();
-                        let date_time = date_time.unwrap().and_local_timezone(*offset).unwrap();
-                        info!("date_time::{:?}", date_time);
-                        info!("date_time::utc::{}", date_time.timestamp_millis());
-                        Some(date_time.timestamp_millis())
+                if let Some(topic) = self.topic.clone() {
+                    let topic_name = topic.name.clone();
+                    info!(
+                        "Confirm settings[connection={:?}, topic={:?}]...",
+                        &connection_id, &topic_name
+                    );
+                    worker.cleanup_messages(&MessagesCleanupRequest {
+                        connection_id,
+                        topic_name: topic_name.clone(),
+                        refresh: false,
+                    });
+                    let fetch_value = match self.selected_fetch_mode {
+                        Some(FetchMode::FromTimestamp) => {
+                            let date_text = widgets.formatted_date.text().to_string();
+                            let hours = widgets.time_hours.value_as_int();
+                            let minutes = widgets.time_minutes.value_as_int();
+                            let seconds = widgets.time_seconds.value_as_int();
+                            let date_time_formatted =
+                                format!("{} {:02}:{:02}:{:02}", date_text, hours, minutes, seconds);
+                            let date_time = NaiveDateTime::parse_from_str(
+                                date_time_formatted.as_str(),
+                                DATE_TIME_FORMAT,
+                            );
+                            let now = Local::now();
+                            let offset = now.offset();
+                            let date_time = date_time.unwrap().and_local_timezone(*offset).unwrap();
+                            info!("date_time::{:?}", date_time);
+                            info!("date_time::utc::{}", date_time.timestamp_millis());
+                            Some(date_time.timestamp_millis())
+                        }
+                        Some(FetchMode::Head) => Some(widgets.first_n_messages.value() as i64),
+                        Some(FetchMode::Tail) => Some(widgets.last_n_messages.value() as i64),
+                        _ => None,
+                    };
+                    let default_page_size = self.selected_default_page_size.unwrap_or_default();
+                    let cache = KrustTopicCache {
+                        connection_id,
+                        topic_name: topic_name.clone(),
+                        fetch_mode: self.selected_fetch_mode.unwrap_or_default(),
+                        fetch_value,
+                        default_page_size,
+                        last_updated: Some(Utc::now().timestamp_millis()),
+                    };
+                    let result = sender.output(MessagesCacheSettingsDialogOutput::Update(cache));
+                    match result {
+                        Ok(_) => info!("cache settings output sent!"),
+                        Err(e) => error!("cache settings output error: {:?}", e),
                     }
-                    Some(FetchMode::Head) => Some(widgets.first_n_messages.value() as i64),
-                    Some(FetchMode::Tail) => Some(widgets.last_n_messages.value() as i64),
-                    _ => None,
-                };
-                let default_page_size = self.selected_default_page_size.unwrap_or_default();
-                let cache = KrustTopicCache {
-                    connection_id,
-                    topic_name: topic_name.clone(),
-                    fetch_mode: self.selected_fetch_mode.unwrap_or_default(),
-                    fetch_value,
-                    default_page_size,
-                    last_updated: Some(Utc::now().timestamp_millis()),
-                };
-                let result = sender.output(MessagesCacheSettingsDialogOutput::Update(cache));
-                match result {
-                    Ok(_) => info!("cache settings output sent!"),
-                    Err(e) => error!("cache settings output error: {:?}", e),
                 }
                 root.close();
             }
@@ -545,6 +599,7 @@ impl Component for MessagesCacheSettingsDialogModel {
     ) {
         match message {
             AsyncCommandOutput::RefreshTopicMessagesCounter(topic) => {
+                info!("refresh topic messages counter async::{:?}", &topic);
                 widgets
                     .status_topic_partitions
                     .set_title(&topic.partitions.len().to_string());

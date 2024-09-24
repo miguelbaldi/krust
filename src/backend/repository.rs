@@ -847,14 +847,33 @@ impl Repository {
         conn_id: usize,
     ) -> Result<Vec<KrustTopic>, ExternalError> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT connection_id, name, favourite FROM kr_topic WHERE connection_id = :cid",
+            "SELECT t.connection_id, t.name, t.favourite, c.fetch_mode, c.fetch_value, c.default_page_size, c.last_updated
+            FROM kr_topic t
+            LEFT JOIN kr_topic_cache c ON c.connection_id = t.connection_id AND c.topic_name = t.name
+            WHERE t.connection_id = :cid",
         )?;
         let rows = stmt
             .query_and_then(named_params! {":cid": &conn_id }, |row| {
+                let cache_fetch_mode: Option<String> = row.get::<usize, Option<String>>(3)?;
+                let cache_fetch_mode: Option<FetchMode> =
+                    cache_fetch_mode.and_then(|str| FetchMode::from_str(&str).ok());
+                let topic_name: String = row.get(1)?;
+                let cached = if let Some(fetch_mode) = cache_fetch_mode {
+                    Some(KrustTopicCache {
+                        connection_id: conn_id,
+                        topic_name: topic_name.clone(),
+                        fetch_mode,
+                        fetch_value: row.get(4)?,
+                        default_page_size: row.get(5)?,
+                        last_updated: row.get(6)?,
+                    })
+                } else {
+                    None
+                };
                 Ok::<KrustTopic, rusqlite::Error>(KrustTopic {
                     connection_id: row.get(0)?,
-                    name: row.get(1)?,
-                    cached: None,
+                    name: topic_name,
+                    cached,
                     partitions: vec![],
                     total: None,
                     favourite: row.get(2)?,

@@ -800,6 +800,20 @@ impl KafkaBackend {
                                 info!("consumer-{}::done::{}", worker_id, local);
                                 break;
                             }
+                        } else {
+                            let local = local_counter.load(Ordering::SeqCst);
+                            let global = mcounter.load(Ordering::SeqCst);
+                            trace!(
+                                "consumer-{}::larger_offset::[partition={}, offset={}/{}, local={}, global={}]",
+                                worker_id, current_partition, current_offset, max_offset, local, global
+                            );
+                            if global >= total {
+                                debug!(
+                                    "consumer-{}::done(larger_offset)::[partition={}, offset={}/{}, local={}, global={}]",
+                                    worker_id, current_partition, current_offset, max_offset, local, global
+                                );
+                                break;
+                            }
                         }
                     }
                 },

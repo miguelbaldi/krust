@@ -1,7 +1,10 @@
 use std::{cell::RefCell, cmp::Ordering, collections::HashMap};
 
+use crate::backend::repository::KrustTopicCache;
+use crate::component::messages::messages_cache_settings_dialog::{
+    MessagesCacheSettingsDialogModel, MessagesCacheSettingsDialogMsg,
+};
 use crate::modals::utils::build_confirmation_alert;
-use crate::AppMsg;
 use crate::{
     backend::{
         kafka::KafkaBackend,
@@ -12,7 +15,10 @@ use crate::{
     modals::utils::show_error_alert,
     Repository, TOASTER_BROKER,
 };
+use crate::{AppMsg, Settings};
 use adw::{prelude::*, AlertDialog};
+use chrono::{TimeZone, Utc};
+use chrono_tz::America;
 use gtk::glib::SignalHandlerId;
 use relm4::{
     factory::{DynamicIndex, FactoryComponent},
@@ -28,23 +34,32 @@ relm4::new_action_group!(pub(super) TopicListActionGroup, "topic-list");
 relm4::new_stateless_action!(pub(super) FavouriteAction, TopicListActionGroup, "toggle-favourite");
 
 // Table: start
-#[derive(Debug)]
 pub struct TopicListItem {
     name: String,
     partition_count: usize,
     favourite: bool,
+    cache: Option<KrustTopicCache>,
+    timestamp_formatter: String,
     sender: FactorySender<TopicsTabModel>,
-    clicked_handler_id: RefCell<Option<SignalHandlerId>>,
+    favourite_clicked_handler: RefCell<Option<SignalHandlerId>>,
+    cache_clicked_handler: RefCell<Option<SignalHandlerId>>,
 }
 
 impl TopicListItem {
-    fn new(value: KrustTopic, sender: FactorySender<TopicsTabModel>) -> Self {
+    fn new(
+        value: KrustTopic,
+        timestamp_formatter: String,
+        sender: FactorySender<TopicsTabModel>,
+    ) -> Self {
         Self {
             name: value.name,
             partition_count: value.partitions.len(),
             favourite: value.favourite.unwrap_or(false),
+            cache: value.cached.clone(),
+            timestamp_formatter,
             sender,
-            clicked_handler_id: RefCell::new(None),
+            favourite_clicked_handler: RefCell::new(None),
+            cache_clicked_handler: RefCell::new(None),
         }
     }
 }
@@ -53,7 +68,6 @@ impl Eq for TopicListItem {}
 
 impl Ord for TopicListItem {
     fn cmp(&self, other: &Self) -> Ordering {
-        //self.partial_cmp(other).unwrap()
         match PartialOrd::partial_cmp(&self.favourite, &other.favourite) {
             Some(Ordering::Equal) => match PartialOrd::partial_cmp(&self.name, &other.name) {
                 Some(Ordering::Equal) => {
@@ -151,11 +165,81 @@ impl RelmColumn for FavouriteColumn {
                 is_active: b.is_active(),
             });
         });
-        item.clicked_handler_id = RefCell::new(Some(signal_id));
+        item.favourite_clicked_handler = RefCell::new(Some(signal_id));
     }
     fn unbind(item: &mut Self::Item, _: &mut Self::Widgets, button: &mut Self::Root) {
-        if let Some(id) = item.clicked_handler_id.take() {
+        if let Some(id) = item.favourite_clicked_handler.take() {
             button.disconnect(id);
+        };
+    }
+}
+struct CacheColumn;
+struct CacheColumnWidgets {
+    cache_button: gtk::Button,
+}
+impl RelmColumn for CacheColumn {
+    type Root = gtk::Box;
+    type Widgets = CacheColumnWidgets;
+    type Item = TopicListItem;
+
+    const COLUMN_NAME: &'static str = "Cache";
+    const ENABLE_RESIZE: bool = false;
+    const ENABLE_EXPAND: bool = false;
+
+    fn setup(_item: &gtk::ListItem) -> (Self::Root, Self::Widgets) {
+        view! {
+            root_box = gtk::Box {
+                set_orientation: gtk::Orientation::Horizontal,
+                set_spacing: 0,
+                set_hexpand: true,
+                set_vexpand: false,
+                set_halign: gtk::Align::Fill,
+                set_valign: gtk::Align::Fill,
+                set_width_request: 200,
+                #[name(cache_button)]
+                gtk::Button {
+                    set_width_request: 180,
+                    add_css_class: "pill",
+                    add_css_class: "cache-pill",
+                    add_css_class: "suggested-action",
+                    set_visible: false,
+                }
+            }
+        }
+        (root_box, CacheColumnWidgets { cache_button })
+    }
+
+    fn bind(item: &mut Self::Item, widgets: &mut Self::Widgets, _box: &mut Self::Root) {
+        if let Some(cache) = item.cache.clone() {
+            widgets
+                .cache_button
+                .set_label(&cache.fetch_mode.to_string());
+            let formatted = format!(
+                "Last update {}",
+                Utc.timestamp_millis_opt(cache.last_updated.unwrap_or_default())
+                    .unwrap()
+                    .with_timezone(&America::Sao_Paulo)
+                    .format(&item.timestamp_formatter)
+            );
+
+            let sender = item.sender.clone();
+            let signal_id = widgets.cache_button.connect_clicked(move |_btn| {
+                sender.input(TopicsTabMsg::CacheClicked {
+                    connection_id: cache.connection_id,
+                    topic_name: cache.topic_name.clone(),
+                });
+            });
+            item.cache_clicked_handler = RefCell::new(Some(signal_id));
+
+            widgets.cache_button.set_tooltip(&formatted);
+            widgets.cache_button.set_visible(true);
+        } else {
+            widgets.cache_button.set_visible(false);
+        }
+    }
+    fn unbind(item: &mut Self::Item, widgets: &mut Self::Widgets, _box: &mut Self::Root) {
+        if let Some(id) = item.cache_clicked_handler.take() {
+            widgets.cache_button.disconnect(id);
         };
     }
 }
@@ -165,7 +249,6 @@ pub struct TopicsTabInit {
     pub connection: KrustConnection,
 }
 
-#[derive(Debug)]
 pub struct TopicsTabModel {
     pub current: Option<KrustConnection>,
     pub topics_wrapper: TypedColumnView<TopicListItem, gtk::SingleSelection>,
@@ -174,6 +257,7 @@ pub struct TopicsTabModel {
     pub create_topic: Controller<CreateTopicDialogModel>,
     pub confirmation_alert: AlertDialog,
     pub selected_topic_name: Option<String>,
+    pub cache_settings_dialog: Controller<MessagesCacheSettingsDialogModel>,
 }
 
 #[derive(Debug)]
@@ -181,7 +265,10 @@ pub enum TopicsTabMsg {
     List(KrustConnection),
     OpenTopic(u32),
     Search(String),
-    FavouriteToggled { topic_name: String, is_active: bool },
+    FavouriteToggled {
+        topic_name: String,
+        is_active: bool,
+    },
     ToggleFavouritesFilter(bool),
     RefreshTopics,
     CreateTopic,
@@ -189,6 +276,10 @@ pub enum TopicsTabMsg {
     ConfirmDeleteTopic,
     Ignore,
     SelectTopic(u32),
+    CacheClicked {
+        connection_id: usize,
+        topic_name: String,
+    },
 }
 
 #[derive(Debug)]
@@ -314,6 +405,7 @@ impl FactoryComponent for TopicsTabModel {
         view_wrapper.append_column::<FavouriteColumn>();
         view_wrapper.append_column::<NameColumn>();
         view_wrapper.append_column::<PartitionCountColumn>();
+        view_wrapper.append_column::<CacheColumn>();
 
         // Add a filter and disable it
         view_wrapper.add_filter(|item| item.favourite);
@@ -338,6 +430,12 @@ impl FactoryComponent for TopicsTabModel {
         confirmation_alert.connect_response(Some("confirm"), move |_, _| {
             snd.input(TopicsTabMsg::ConfirmDeleteTopic);
         });
+
+        let cache_settings_dialog = MessagesCacheSettingsDialogModel::builder()
+            //.transient_for(main_application())
+            .launch((connection.clone(), None))
+            .detach();
+
         let model = TopicsTabModel {
             current: Some(connection),
             topics_wrapper: view_wrapper,
@@ -346,6 +444,7 @@ impl FactoryComponent for TopicsTabModel {
             create_topic,
             confirmation_alert,
             selected_topic_name: None,
+            cache_settings_dialog,
         };
 
         let topics_view = &model.topics_wrapper.view;
@@ -376,6 +475,15 @@ impl FactoryComponent for TopicsTabModel {
         sender: FactorySender<Self>,
     ) {
         match msg {
+            TopicsTabMsg::CacheClicked {
+                connection_id,
+                topic_name,
+            } => {
+                info!("CacheClicked::{}::{}", connection_id, &topic_name);
+
+                self.cache_settings_dialog
+                    .emit(MessagesCacheSettingsDialogMsg::ShowReadonly { topic_name });
+            }
             TopicsTabMsg::Ignore => {}
             TopicsTabMsg::SelectTopic(idx) => {
                 let item = self.topics_wrapper.get_visible(idx).unwrap();
@@ -536,10 +644,14 @@ impl FactoryComponent for TopicsTabModel {
         match message {
             CommandMsg::ListFinished(topics) => {
                 self.topics_wrapper.clear();
+                let settings = Settings::read().unwrap_or_default();
+                let timestamp_formatter = settings.timestamp_formatter();
                 for topic in topics.into_iter().filter(|t| !t.name.starts_with("__")) {
                     let snd = sender.clone();
-                    self.topics_wrapper
-                        .insert_sorted(TopicListItem::new(topic, snd), |a, b| a.cmp(b));
+                    self.topics_wrapper.insert_sorted(
+                        TopicListItem::new(topic, timestamp_formatter.clone(), snd),
+                        |a, b| a.cmp(b),
+                    );
                 }
                 let vadj = widgets.topics_scrolled_windows.vadjustment();
                 info!(

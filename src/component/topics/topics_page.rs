@@ -18,7 +18,6 @@ relm4::new_action_group!(pub(super) ConnectionTabActionGroup, "connection-tab");
 relm4::new_stateless_action!(pub(super) PinTabAction, ConnectionTabActionGroup, "toggle-pin");
 relm4::new_stateless_action!(pub(super) CloseTabAction, ConnectionTabActionGroup, "close");
 
-#[derive(Debug)]
 pub struct TopicsPageModel {
     pub current: Option<KrustConnection>,
     pub topics: FactoryVecDeque<TopicsTabModel>,
@@ -220,7 +219,8 @@ impl Component for TopicsPageModel {
                         let result = topics.remove(idx);
                         info!(
                             "page model with index {} and name {:?} removed",
-                            idx, result
+                            idx,
+                            result.is_some()
                         );
                     } else {
                         info!("page model not found for removal");
