@@ -3,19 +3,23 @@
 // See: https://gitlab.gnome.org/GNOME/gtk/-/issues/5644
 use crate::{
     backend::repository::{KrustConnection, KrustTopic},
-    Repository,
+    component::{colorize_widget_by_connection, get_tab_by_title},
+    AppMsg, Repository, TOASTER_BROKER,
 };
+use adw::prelude::*;
 use adw::TabPage;
+use copypasta::{ClipboardContext, ClipboardProvider};
 use relm4::{actions::RelmAction, factory::FactoryVecDeque, *};
-use sourceview::prelude::*;
-use sourceview5 as sourceview;
-use tracing::info;
+
+use tracing::*;
+use uuid::Uuid;
 
 use super::messages_tab::{MessagesTabInit, MessagesTabModel, MessagesTabMsg};
 
 relm4::new_action_group!(pub(super) TopicTabActionGroup, "topic-tab");
 relm4::new_stateless_action!(pub(super) PinTabAction, TopicTabActionGroup, "toggle-pin");
 relm4::new_stateless_action!(pub(super) CloseTabAction, TopicTabActionGroup, "close");
+relm4::new_stateless_action!(pub(super) CopyTopicNameAction, TopicTabActionGroup, "copy-topic-name");
 
 pub static MESSAGES_PAGE_BROKER: MessageBroker<MessagesPageMsg> = MessageBroker::new();
 
@@ -23,6 +27,7 @@ pub struct MessagesPageModel {
     topic: Option<KrustTopic>,
     connection: Option<KrustConnection>,
     topics: FactoryVecDeque<MessagesTabModel>,
+    clipboard: Box<dyn ClipboardProvider>,
 }
 
 #[derive(Debug)]
@@ -31,6 +36,7 @@ pub enum MessagesPageMsg {
     PageAdded(i32),
     MenuPageClosed,
     MenuPagePin,
+    CopyTopicName,
     RefreshTopicTab {
         connection_id: usize,
         topic_name: String,
@@ -49,6 +55,7 @@ impl Component for MessagesPageModel {
             section! {
                 "_Toggle pin" => PinTabAction,
                 "_Close" => CloseTabAction,
+                "_Copy topic name" => CopyTopicNameAction,
             }
         }
     }
@@ -113,14 +120,20 @@ impl Component for MessagesPageModel {
         let pin_tab_action = RelmAction::<PinTabAction>::new_stateless(move |_| {
             tabs_sender.send(MessagesPageMsg::MenuPagePin).unwrap();
         });
+        let tabs_sender = sender.input_sender().clone();
+        let copy_topic_name_action = RelmAction::<CopyTopicNameAction>::new_stateless(move |_| {
+            tabs_sender.send(MessagesPageMsg::CopyTopicName).unwrap();
+        });
         topics_tabs_actions.add_action(close_tab_action);
         topics_tabs_actions.add_action(pin_tab_action);
+        topics_tabs_actions.add_action(copy_topic_name_action);
         topics_tabs_actions.register_for_widget(&widgets.topics_tabs);
-
+        let clipboard = Box::new(ClipboardContext::new().unwrap());
         let model = MessagesPageModel {
             topic: None,
             connection: None,
             topics,
+            clipboard,
         };
 
         ComponentParts { model, widgets }
@@ -164,15 +177,19 @@ impl Component for MessagesPageModel {
             }
             MessagesPageMsg::PageAdded(index) => {
                 let tab_model = self.topics.get(index.try_into().unwrap()).unwrap();
-                let title = format!(
-                    "[{}] {}",
-                    tab_model.connection.clone().unwrap().name,
-                    tab_model.topic.clone().unwrap().name
-                );
+                let conn = tab_model.connection.clone().unwrap();
+                let title = format!("[{}] {}", conn.name, tab_model.topic.clone().unwrap().name);
                 let page = self.get_tab_page_by_index(widgets, index);
                 if let Some(page) = page {
                     page.set_title(title.as_str());
                     page.set_live_thumbnail(true);
+
+                    let maybe_tab = get_tab_by_title(&widgets.topics_tabs, title);
+
+                    if let Some(tab) = maybe_tab {
+                        colorize_widget_by_connection(&conn, tab);
+                    }
+
                     widgets.topics_viewer.set_selected_page(&page);
                 }
             }
@@ -181,6 +198,24 @@ impl Component for MessagesPageModel {
                 if let Some(page) = page {
                     let pinned = !page.is_pinned();
                     widgets.topics_viewer.set_page_pinned(&page, pinned);
+                }
+            }
+            MessagesPageMsg::CopyTopicName => {
+                let page = widgets.topics_viewer.selected_page();
+                if let Some(page) = page {
+                    let topic = self.get_model_by_tab_page(page);
+                    if let Some(topic) = topic {
+                        let topic_name = topic.name.clone();
+                        let id = Uuid::new_v4();
+                        TOASTER_BROKER
+                            .send(AppMsg::ShowToast(id.to_string(), "Copied!".to_string()));
+                        self.clipboard
+                            .set_contents(topic_name)
+                            .unwrap_or_else(|err| {
+                                warn!("unable to store topic name in clipboard: {}", err);
+                            });
+                        TOASTER_BROKER.send(AppMsg::HideToast(id.to_string()));
+                    }
                 }
             }
             MessagesPageMsg::MenuPageClosed => {
@@ -269,6 +304,27 @@ impl MessagesPageModel {
             }
         }
         has_page
+    }
+    fn get_model_by_tab_page(&mut self, page: TabPage) -> Option<KrustTopic> {
+        info!("get_model_by_tab_page page title{}", page.title());
+        let mut model: Option<KrustTopic> = None;
+        let mut topics = self.topics.guard();
+        for i in 0..topics.len() {
+            let tp = topics.get_mut(i);
+            if let Some(tp) = tp {
+                let title = format!(
+                    "[{}] {}",
+                    tp.connection.clone().unwrap().name.clone(),
+                    tp.topic.clone().unwrap().name.clone()
+                );
+                info!("PageClosed [{}][{}={}]", i, title, page.title());
+                if title.eq(&page.title().to_string()) {
+                    model = tp.topic.clone();
+                    break;
+                }
+            }
+        }
+        model
     }
     fn get_tab_page_by_index(
         &self,

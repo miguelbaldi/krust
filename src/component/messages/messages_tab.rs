@@ -14,13 +14,14 @@ use relm4::{
     typed_view::column::TypedColumnView,
     *,
 };
-use relm4_components::simple_combo_box::SimpleComboBox;
+
+use relm4_components::simple_combo_box::{SimpleComboBox, SimpleComboBoxMsg};
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 use uuid::Uuid;
 
 use crate::backend::kafka::KafkaBackend;
-use crate::backend::repository::MessagesSearchOrder;
+use crate::backend::repository::{KrustTopicCache, MessagesSearchOrder};
 use crate::backend::settings::Settings;
 use crate::backend::worker::MessagesTotalCounterRequest;
 use crate::component::settings_dialog::MessagesSortOrder;
@@ -46,6 +47,10 @@ use crate::{
 use crate::{AppMsg, TOASTER_BROKER};
 
 use super::message_viewer::{MessageViewerModel, MessageViewerMsg};
+use super::messages_cache_settings_dialog::{
+    MessagesCacheSettingsDialogModel, MessagesCacheSettingsDialogMsg,
+    MessagesCacheSettingsDialogOutput,
+};
 use super::messages_send_dialog::MessagesSendDialogMsg;
 use super::{lists::MessageKeyColumn, messages_send_dialog::MessagesSendDialogModel};
 use copypasta::{ClipboardContext, ClipboardProvider};
@@ -79,6 +84,8 @@ pub struct MessagesTabModel {
     add_messages: Controller<MessagesSendDialogModel>,
     clipboard: Box<dyn ClipboardProvider>,
     cache_search_order: Option<MessagesSearchOrder>,
+    cache_settings_dialog: Controller<MessagesCacheSettingsDialogModel>,
+    cache_settings: Option<KrustTopicCache>,
 }
 
 pub struct MessagesTabInit {
@@ -117,6 +124,8 @@ pub enum MessagesTabMsg {
     AddMessages,
     SetCacheOrder(Option<String>, String),
     RefreshTopic,
+    ShowCacheSettings,
+    UpdateCacheSettings(KrustTopicCache),
 }
 
 #[derive(Debug)]
@@ -127,7 +136,7 @@ pub enum CommandMsg {
     MessagesResendResult(String, Option<()>),
 }
 
-const AVAILABLE_PAGE_SIZES: [u16; 7] = [1000, 2000, 5000, 7000, 10000, 20000, 50000];
+pub const AVAILABLE_PAGE_SIZES: [u16; 7] = [1000, 2000, 5000, 7000, 10000, 20000, 50000];
 
 #[relm4::factory(pub)]
 impl FactoryComponent for MessagesTabModel {
@@ -209,14 +218,13 @@ impl FactoryComponent for MessagesTabModel {
                                 sender.input(MessagesTabMsg::AddMessages);
                             },
                         },
-                        #[name(btn_cache_destroy)]
+                        #[name(btn_cache_settings)]
                         gtk::Button {
-                            set_tooltip_text: Some("Destroy cache"),
-                            set_icon_name: "edit-delete-symbolic",
+                            set_tooltip_text: Some("Cache settings"),
+                            set_icon_name: "emblem-system-symbolic",
                             set_margin_start: 5,
-                            add_css_class: "krust-destroy",
                             connect_clicked[sender] => move |_| {
-                                sender.input(MessagesTabMsg::DestroyCache);
+                                sender.input(MessagesTabMsg::ShowCacheSettings);
                             },
                         },
                         #[name(btn_cache_toggle)]
@@ -234,7 +242,18 @@ impl FactoryComponent for MessagesTabModel {
                             set_margin_start: 5,
                             set_label: "",
                             set_visible: false,
-                        }
+                            add_css_class: "cache-timestamp",
+                        },
+                        #[name(btn_cache_destroy)]
+                        gtk::Button {
+                            set_tooltip_text: Some("Destroy cache"),
+                            set_icon_name: "edit-delete-symbolic",
+                            set_margin_start: 5,
+                            add_css_class: "destructive-action",
+                            connect_clicked[sender] => move |_| {
+                                sender.input(MessagesTabMsg::DestroyCache);
+                            },
+                        },
                     },
                     #[wrap(Some)]
                     set_end_widget = &gtk::Box {
@@ -321,7 +340,7 @@ impl FactoryComponent for MessagesTabModel {
                             #[name(total_counter_entry)]
                             gtk::Entry {
                                 set_editable: false,
-                                set_sensitive: false,
+                                set_sensitive: true,
                                 set_margin_start: 5,
                                 set_width_chars: 10,
                             },
@@ -445,7 +464,11 @@ impl FactoryComponent for MessagesTabModel {
 
         // Initialize message viewer
         let message_viewer = MessageViewerModel::builder().launch(()).detach();
-        let default_idx = 0;
+        let cache_settings = open.topic.cached.clone();
+        let default_idx = cache_settings
+            .clone()
+            .map(|c| c.default_page_size as usize)
+            .unwrap_or_default();
         let page_size_combo = SimpleComboBox::builder()
             .launch(SimpleComboBox {
                 variants: AVAILABLE_PAGE_SIZES.to_vec(),
@@ -453,10 +476,11 @@ impl FactoryComponent for MessagesTabModel {
             })
             .forward(sender.input_sender(), MessagesTabMsg::PageSizeChanged);
         page_size_combo.widget().queue_allocate();
+        let fetch_type_default_idx = 0;
         let fetch_type_combo = SimpleComboBox::builder()
             .launch(SimpleComboBox {
                 variants: KafkaFetch::VALUES.to_vec(),
-                active_index: Some(default_idx),
+                active_index: Some(fetch_type_default_idx),
             })
             .forward(sender.input_sender(), MessagesTabMsg::FetchTypeChanged);
 
@@ -513,6 +537,14 @@ impl FactoryComponent for MessagesTabModel {
             //.transient_for(main_application())
             .launch((Some(open.connection.clone()), Some(open.topic.clone())))
             .detach();
+        let cache_settings_dialog = MessagesCacheSettingsDialogModel::builder()
+            //.transient_for(main_application())
+            .launch((open.connection.clone(), Some(open.topic.clone())))
+            .forward(sender.input_sender(), |msg| match msg {
+                MessagesCacheSettingsDialogOutput::Update(cache) => {
+                    MessagesTabMsg::UpdateCacheSettings(cache)
+                }
+            });
         let clipboard = Box::new(ClipboardContext::new().unwrap());
         let model = MessagesTabModel {
             token: CancellationToken::new(),
@@ -522,7 +554,7 @@ impl FactoryComponent for MessagesTabModel {
             messages_wrapper,
             message_viewer,
             page_size_combo,
-            page_size: AVAILABLE_PAGE_SIZES[0],
+            page_size: AVAILABLE_PAGE_SIZES[default_idx],
             fetch_type_combo,
             fetch_type: KafkaFetch::default(),
             max_messages: 1000.0,
@@ -530,6 +562,8 @@ impl FactoryComponent for MessagesTabModel {
             add_messages,
             clipboard,
             cache_search_order: None,
+            cache_settings_dialog,
+            cache_settings,
         };
         let messages_view = &model.messages_wrapper.view;
         let sender_for_selection = sender.clone();
@@ -637,6 +671,14 @@ impl FactoryComponent for MessagesTabModel {
         sender: FactorySender<Self>,
     ) {
         match msg {
+            MessagesTabMsg::UpdateCacheSettings(cache) => {
+                info!("topic cache settings updated! {:?}", cache);
+                self.cache_settings = Some(cache.clone());
+                let cache_settings = cache.clone();
+                let default_idx = cache_settings.default_page_size as usize;
+                self.page_size_combo
+                    .emit(SimpleComboBoxMsg::SetActiveIdx(default_idx));
+            }
             MessagesTabMsg::SetCacheOrder(maybe_column, order) => {
                 let cache_messages_order =
                     maybe_column.map(|column| MessagesSearchOrder { column, order });
@@ -647,6 +689,10 @@ impl FactoryComponent for MessagesTabModel {
             }
             MessagesTabMsg::AddMessages => {
                 self.add_messages.emit(MessagesSendDialogMsg::Show);
+            }
+            MessagesTabMsg::ShowCacheSettings => {
+                self.cache_settings_dialog
+                    .emit(MessagesCacheSettingsDialogMsg::Show);
             }
             MessagesTabMsg::DigitsOnly(value) => {
                 self.max_messages = value;
@@ -660,12 +706,14 @@ impl FactoryComponent for MessagesTabModel {
                     widgets.live_controls.set_visible(false);
                     widgets.btn_cache_refresh.set_visible(true);
                     widgets.btn_cache_destroy.set_visible(true);
+                    widgets.btn_cache_settings.set_visible(true);
                     widgets.pag_total_label.set_text("Total");
                     MessagesMode::Cached { refresh: false }
                 } else {
                     widgets.live_controls.set_visible(true);
                     widgets.btn_cache_refresh.set_visible(false);
                     widgets.btn_cache_destroy.set_visible(false);
+                    widgets.btn_cache_settings.set_visible(false);
                     widgets.pag_total_label.set_text("Messages");
                     widgets.cached_controls.set_visible(false);
                     widgets.cached_centered_controls.set_visible(false);
@@ -680,7 +728,10 @@ impl FactoryComponent for MessagesTabModel {
                 };
                 self.page_size = page_size;
                 self.page_size_combo.widget().queue_allocate();
-                sender.input(MessagesTabMsg::SearchMessages);
+                let cache = self.find_cache();
+                if cache.is_some() {
+                    sender.input(MessagesTabMsg::SearchMessages);
+                }
             }
             MessagesTabMsg::FetchTypeChanged(_idx) => {
                 let fetch_type = match self.fetch_type_combo.model().get_active_elem() {
@@ -769,23 +820,33 @@ impl FactoryComponent for MessagesTabModel {
                 let mut repo = Repository::new();
                 let maybe_topic = repo.find_topic(*conn_id, topic_name);
                 self.topic = maybe_topic.clone().or(Some(*topic));
+                self.cache_settings = self.topic.clone().and_then(|t| t.cached);
                 let toggled = match &maybe_topic {
                     Some(t) => t.cached.is_some(),
                     None => false,
                 };
                 let cache_ts = maybe_topic
                     .and_then(|t| {
-                        t.cached.map(|ts| {
-                            Utc.timestamp_millis_opt(ts)
-                                .unwrap()
-                                .with_timezone(&America::Sao_Paulo)
-                                .format(&timestamp_format)
-                                .to_string()
+                        t.cached.map(|c| {
+                            c.last_updated.map(|ts| {
+                                Utc.timestamp_millis_opt(ts)
+                                    .unwrap()
+                                    .with_timezone(&America::Sao_Paulo)
+                                    .format(&timestamp_format)
+                                    .to_string()
+                            })
                         })
                     })
                     .unwrap_or_default();
-                widgets.cache_timestamp.set_label(&cache_ts);
-                widgets.cache_timestamp.set_visible(true);
+                if cache_ts.clone().is_some() {
+                    widgets.cache_timestamp.set_visible(true);
+                    widgets
+                        .cache_timestamp
+                        .set_label(&cache_ts.unwrap_or_default());
+                } else {
+                    widgets.cache_timestamp.set_visible(false);
+                    widgets.cache_timestamp.set_label("");
+                }
                 widgets.btn_cache_toggle.set_active(toggled);
                 widgets.pag_total_entry.set_text("");
                 widgets.pag_current_entry.set_text("");
@@ -861,6 +922,7 @@ impl FactoryComponent for MessagesTabModel {
                 );
                 TOASTER_BROKER.send(AppMsg::ShowToast(task.id.clone(), "Working...".to_string()));
                 TASK_MANAGER_BROKER.send(TaskManagerMsg::AddTask(task.clone()));
+                let cache = self.cache_settings.clone();
                 sender.oneshot_command(async move {
                     // Run async background task
                     let messages_worker = MessagesWorker::new();
@@ -876,6 +938,7 @@ impl FactoryComponent for MessagesTabModel {
                             search,
                             fetch,
                             max_messages,
+                            cache,
                         })
                         .await
                         .unwrap();
@@ -933,6 +996,7 @@ impl FactoryComponent for MessagesTabModel {
                     MessagesWorker::new().cleanup_messages(&MessagesCleanupRequest {
                         connection_id: conn.id.unwrap(),
                         topic_name: topic.name.clone(),
+                        refresh: false,
                     });
                 info!("destroying cached message::{:?}", result_topic.clone());
                 match result_topic {
@@ -940,6 +1004,7 @@ impl FactoryComponent for MessagesTabModel {
                     None => warn!("unable to destroy cache"),
                 };
                 widgets.cache_timestamp.set_text("");
+                widgets.cache_timestamp.set_visible(false);
                 widgets.btn_cache_toggle.set_active(false);
                 sender.input(MessagesTabMsg::ToggleMode(false));
             }
@@ -952,6 +1017,7 @@ impl FactoryComponent for MessagesTabModel {
                         self.topic = Some(topic.clone());
                         if topic.cached.is_none() {
                             widgets.cache_timestamp.set_text("");
+                            widgets.cache_timestamp.set_visible(false);
                             widgets.btn_cache_toggle.set_active(false);
                             sender.input(MessagesTabMsg::ToggleMode(false));
                         }
@@ -999,6 +1065,7 @@ impl FactoryComponent for MessagesTabModel {
                 let timestamp_formatter = settings.timestamp_formatter();
                 let total = response.total;
                 self.topic = response.topic.clone();
+                self.cache_settings = self.topic.clone().and_then(|t| t.cached);
                 match self.mode {
                     MessagesMode::Live => info!("no need to cleanup list on live mode"),
                     MessagesMode::Cached { refresh: _ } => self.messages_wrapper.clear(),
@@ -1037,20 +1104,26 @@ impl FactoryComponent for MessagesTabModel {
                         .map(|m| MessageListItem::new(m.clone(), timestamp_formatter.clone())),
                 );
                 self.message_viewer.emit(MessageViewerMsg::Clear);
-                let cache_ts = response
-                    .topic
-                    .and_then(|t| {
-                        t.cached.map(|ts| {
-                            Utc.timestamp_millis_opt(ts)
-                                .unwrap()
-                                .with_timezone(&America::Sao_Paulo)
-                                .format(&timestamp_formatter)
-                                .to_string()
-                        })
+                let cache_ts = response.topic.and_then(|t| {
+                    t.cached.map(|c| {
+                        c.last_updated
+                            .map(|ts| {
+                                Utc.timestamp_millis_opt(ts)
+                                    .unwrap()
+                                    .with_timezone(&America::Sao_Paulo)
+                                    .format(&timestamp_formatter)
+                                    .to_string()
+                            })
+                            .unwrap_or_default()
                     })
-                    .unwrap_or(String::default());
-                widgets.cache_timestamp.set_label(&cache_ts);
-                widgets.cache_timestamp.set_visible(true);
+                });
+                if let Some(cache_ts) = cache_ts {
+                    widgets.cache_timestamp.set_label(&cache_ts);
+                    widgets.cache_timestamp.set_visible(true);
+                } else {
+                    widgets.cache_timestamp.set_label("");
+                    widgets.cache_timestamp.set_visible(false);
+                }
                 TOASTER_BROKER.send(AppMsg::HideToast(response.task.clone().unwrap().id.clone()));
                 STATUS_BROKER.send(StatusBarMsg::StopWithInfo {
                     text: Some(format!("{} messages loaded!", self.messages_wrapper.len())),
@@ -1102,6 +1175,20 @@ impl FactoryComponent for MessagesTabModel {
                 TOASTER_BROKER.send(AppMsg::HideToast(id));
             }
         }
+    }
+}
+
+impl MessagesTabModel {
+    fn find_cache(&mut self) -> Option<KrustTopicCache> {
+        let connection_id = self
+            .connection
+            .clone()
+            .expect("should have connection")
+            .id
+            .unwrap();
+        let topic_name = &self.topic.clone().expect("should have a topic").name;
+        let mut repo = Repository::new();
+        repo.find_topic_cache(connection_id, topic_name)
     }
 }
 

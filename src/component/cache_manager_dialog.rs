@@ -1,6 +1,6 @@
 use adw::prelude::*;
 use fs_extra::dir::get_size;
-use gtk::glib::SignalHandlerId;
+use gtk::{glib::SignalHandlerId, ColumnViewColumn};
 use humansize::{format_size, DECIMAL};
 use std::{cell::RefCell, cmp::Ordering, fs, path::Path};
 use sysinfo::Disks;
@@ -265,6 +265,7 @@ pub enum CacheManagerDialogMsg {
         connection_id: usize,
         topic_name: String,
     },
+    Refresh,
 }
 
 pub struct CacheManagerDialogInit {}
@@ -282,7 +283,20 @@ impl Component for CacheManagerDialogModel {
             set_title: "Cache Manager",
             #[wrap(Some)]
             set_child = &gtk::Box {
-                adw::HeaderBar {},
+                adw::HeaderBar {
+                    pack_end = &gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        gtk::Button {
+                            set_tooltip_text: Some("Refresh disk/cache usage"),
+                            set_icon_name: "media-playlist-repeat-symbolic",
+                            set_margin_end: 5,
+                            add_css_class: "circular",
+                            connect_clicked[sender] => move |_| {
+                                sender.input(CacheManagerDialogMsg::Refresh);
+                            },
+                        }
+                    },
+                },
                 set_valign: gtk::Align::Fill,
                 set_orientation: gtk::Orientation::Vertical,
                 gtk::Box {
@@ -352,7 +366,7 @@ impl Component for CacheManagerDialogModel {
     fn init(
         _init: Self::Init,
         root: Self::Root,
-        _sender: ComponentSender<Self>,
+        sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let settings = Settings::read().unwrap_or_default();
         // Initialize the ListView wrapper
@@ -360,6 +374,15 @@ impl Component for CacheManagerDialogModel {
         view_wrapper.append_column::<DiskUsageColumn>();
         view_wrapper.append_column::<ConnectionColumn>();
         view_wrapper.append_column::<TopicColumn>();
+        let sort_column: Option<&ColumnViewColumn> =
+            view_wrapper.get_columns().get(DiskUsageColumn::COLUMN_NAME);
+        let sort_type = gtk::SortType::Descending;
+        info!(
+            "sort_column::{:?}, sort_type::{:?}",
+            sort_column.map(|c| c.title()),
+            sort_type
+        );
+        view_wrapper.view.sort_by_column(sort_column, sort_type);
 
         let model = CacheManagerDialogModel {
             cache_dir: settings.cache_dir,
@@ -380,6 +403,11 @@ impl Component for CacheManagerDialogModel {
         match message {
             CacheManagerDialogMsg::Show => {
                 let parent = &relm4::main_application().active_window().unwrap();
+                sender.input(CacheManagerDialogMsg::Refresh);
+                root.queue_allocate();
+                root.present(parent);
+            }
+            CacheManagerDialogMsg::Refresh => {
                 self.topics_wrapper.clear();
                 let mut disks = Disks::new_with_refreshed_list();
                 let settings = Settings::read().unwrap_or_default();
@@ -414,8 +442,6 @@ impl Component for CacheManagerDialogModel {
                             cache_size_formatted,
                         );
                     }
-                    root.queue_allocate();
-                    root.present(parent);
                 }
             }
             CacheManagerDialogMsg::DeleteTopicCache {
@@ -434,6 +460,7 @@ impl Component for CacheManagerDialogModel {
                     let maybe_topic = worker.cleanup_messages(&MessagesCleanupRequest {
                         connection_id,
                         topic_name,
+                        refresh: true,
                     });
                     if let Some(_topic) = maybe_topic {
                         self.topics_wrapper.remove(idx);
