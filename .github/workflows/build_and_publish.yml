@@ -7,7 +7,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  build-linux-appimage-rpm:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,10 +18,32 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: executables-linux
+          name: executables-linux-appimage-rpm
           if-no-files-found: error
           path: |
             target/appimage/*.AppImage
+            target/generate-rpm/*.rpm
+  build-linux-deb:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fix tag reference (workaround for https://github.com/actions/checkout/issues/290)
+        run: git fetch --update-head-ok -f origin ${{ github.ref }}:${{ github.ref }}
+      - name: Install system dependencies
+        run: |
+          sudo apt-get install -y pkg-config libgtk-4-dev libadwaita-1-dev libsasl2-dev libgtksourceview-5-dev openssl
+          cargo install cargo-deb
+      - name: Build
+        run: |
+          cargo deb --deb-version $(git describe)
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: executables-linux-deb
+          if-no-files-found: error
+          path: |
+            target/debian/*.deb
+
   build-windows:
     runs-on: ubuntu-latest
     steps:
@@ -31,7 +53,7 @@ jobs:
       - name: Build (Windows)
         run: docker compose -f docker-compose.windows.yml up
       - name: Make Windows Installer
-        run: ./create_windows_installer.sh
+        run: ./build-scripts/create_windows_installer.sh
       - name: Zip Portable Windows Artifact
         run: zip -r windows-portable.zip package
       - name: Upload Artifact
@@ -39,13 +61,13 @@ jobs:
         with:
           name: executables-windows
           path: |
-            *.zip
+            windows-portable.zip
             *.exe
 
   publish:
     permissions:
       contents: write
-    needs: [build, build-windows]
+    needs: [build-linux-appimage-rpm, build-linux-deb, build-windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -58,11 +80,13 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           prerelease: false
-          draft: true 
+          draft: true
           generate_release_notes: true
           append_body: true
           files: |
             **/*.AppImage
             **/*.zip
             **/*.exe
+            **/*.deb
+            **/*.rpm
       - run: ls -R .

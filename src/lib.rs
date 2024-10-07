@@ -1,8 +1,8 @@
-//! Small, general purpose file manager built using GTK.
-//!
-//! Generally, each top-level module corresponds to a different Relm4 component.
-
 #![warn(clippy::dbg_macro)]
+// Copyright (c) 2024, Miguel A. Baldi Hörlle <miguel.horlle@gmail.com>. All rights reserved. Use of
+// this source code is governed by the GPL-3.0 license that can be
+// found in the COPYING file.
+
 #![warn(clippy::print_stderr)]
 #![warn(clippy::print_stdout)]
 #![warn(clippy::todo)]
