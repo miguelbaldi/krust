@@ -1,4 +1,8 @@
 #!/bin/bash
+# Copyright (c) 2024, Miguel A. Baldi Hörlle <miguel.horlle@gmail.com>. All rights reserved. Use of
+# this source code is governed by the GPL-3.0 license that can be
+# found in the COPYING file.
+
 set -euo pipefail
 
 dnf -y install mingw64-openssl-static mingw64-gcc-c++ zstd cyrus-sasl-devel perl
@@ -44,4 +48,5 @@ export CHRONO_TZ_TIMEZONE_FILTER="(GMT|UTC|Brazil/.*)"
 git config --global --add safe.directory /mnt
 git config --global --list
 git describe
+. ~/.cargo/env && rustup target add x86_64-pc-windows-gnu
 build && package

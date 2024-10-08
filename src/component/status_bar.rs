@@ -1,3 +1,7 @@
+// Copyright (c) 2024, Miguel A. Baldi Hörlle <miguel.horlle@gmail.com>. All rights reserved. Use of
+// this source code is governed by the GPL-3.0 license that can be
+// found in the COPYING file.
+
 //! Alert dialog for displaying arbitrary errors.
 //!
 //! Inspired by [`relm4_components::alert`], but allows sending the dialog text as part of the

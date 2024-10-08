@@ -1,3 +1,7 @@
+// Copyright (c) 2024, Miguel A. Baldi Hörlle <miguel.horlle@gmail.com>. All rights reserved. Use of
+// this source code is governed by the GPL-3.0 license that can be
+// found in the COPYING file.
+
 use anyhow::Result;
 use std::{env, path::Path, process::Command};
 use vergen::EmitBuilder;
@@ -56,17 +60,13 @@ pub fn compile_resources<P: AsRef<Path>>(source_dirs: &[P], gresource: &str, tar
     }
 }
 
-fn main() -> Result<()>{
+fn main() -> Result<()> {
     compile_resources(
         &["data"],
         "data/resources.gresource.xml",
         "resources.gresource",
     );
-    compile_resources(
-        &["data"],
-        "data/icons.gresource.xml",
-        "icons.gresource",
-    );
+    compile_resources(&["data"], "data/icons.gresource.xml", "icons.gresource");
 
     EmitBuilder::builder()
         .all_build()
@@ -74,5 +74,10 @@ fn main() -> Result<()>{
         .all_sysinfo()
         .fail_on_error()
         .emit()?;
+    let version: String = std::env::var("VERGEN_GIT_DESCRIBE")
+        .unwrap_or("0.0.1-dev".to_string())
+        .clone();
+    println!("cargo:rustc-env=CARGO_PKG_VERSION={}", version);
+    println!("cargo:rerun-if-env-changed=VERGEN_GIT_DESCRIBE");
     Ok(())
 }

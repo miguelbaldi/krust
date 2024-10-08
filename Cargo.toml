@@ -1,13 +1,15 @@
 [package]
 name = "krust"
-rust-version = "1.77"
-version = "0.0.1"
+rust-version = "1.78"
+publish = false
+version = "0.0.0"
 edition = "2021"
 resolver = "2"
 authors = ["Miguel A. Baldi Hörlle <miguel.horlle@gmail.com>"]
 description = "Kafka desktop client"
 repository = "https://github.com/miguelbaldi/krust"
-license-file = "LICENSE.md"
+license-file = "COPYING"
+license = "GPL-3.0-or-later"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -62,4 +64,84 @@ auto_link_exclude_list = [
     "libpthread.so*",
     "libstdc++.so*",
     "libm.so*",
+]
+
+[package.metadata.rpm]
+package = "krust"
+
+[package.metadata.rpm.cargo]
+buildflags = ["--release"]
+
+[package.metadata.rpm.targets]
+krust = { path = "/usr/bin/krust" }
+
+[package.metadata.generate-rpm]
+
+assets = [
+    { source = "target/release/krust", dest = "/usr/bin/krust", mode = "755" },
+    { source = "krust.desktop", dest = "/usr/share/applications/krust.desktop", mode = "644" },
+    { source = "data/images/krust.png", dest = "/usr/share/pixmaps/", mode = "644" },
+    { source = "data/images/krust.svg", dest = "/usr/share/pixmaps/", mode = "644" },
+    { source = "data/images/io.miguelbaldi.KRust.png", dest = "/usr/share/pixmaps/", mode = "644" },
+    { source = "data/images/io.miguelbaldi.KRust.svg", dest = "/usr/share/icons/hicolor/scalable/apps/", mode = "644" },
+    { source = "data/images/io.miguelbaldi.KRust-symbolic.png", dest = "/usr/share/icons/hicolor/symbolic/apps/", mode = "644" },
+    { source = "data/images/io.miguelbaldi.KRust-symbolic.svg", dest = "/usr/share/icons/hicolor/symbolic/apps/", mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+gtksourceview5 = "*"
+libadwaita = "*"
+cyrus-sasl-devel = "*"
+openssl-devel = "*"
+
+[package.metadata.deb]
+maintainer = "Miguel A. Baldi Hörlle <miguel.horlle@gmail.com>"
+copyright = "2024, Miguel A. Baldi Hörlle <miguel.horlle@gmail.com>"
+license-file = ["COPYING"]
+extended-description = """\
+A simple Apache Kafka GUI client \
+useful for developers as well adminstrators."""
+depends = "$auto"
+section = "Utility;Development;IDE;"
+assets = [
+    [
+        "target/release/krust",
+        "usr/bin/",
+        "755",
+    ],
+    [
+        "krust.desktop",
+        "usr/share/applications/",
+        "644",
+    ],
+    [
+        "data/images/krust.png",
+        "usr/share/pixmaps/",
+        "644",
+    ],
+    [
+        "data/images/krust.svg",
+        "usr/share/pixmaps/",
+        "644",
+    ],
+    [
+        "data/images/io.miguelbaldi.KRust.png",
+        "usr/share/pixmaps/",
+        "644",
+    ],
+    [
+        "data/images/io.miguelbaldi.KRust.svg",
+        "usr/share/icons/hicolor/scalable/apps/",
+        "644",
+    ],
+    [
+        "data/images/io.miguelbaldi.KRust-symbolic.png",
+        "usr/share/icons/hicolor/symbolic/apps/",
+        "644",
+    ],
+    [
+        "data/images/io.miguelbaldi.KRust-symbolic.svg",
+        "usr/share/icons/hicolor/symbolic/apps/",
+        "644",
+    ],
 ]
