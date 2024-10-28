@@ -1,3 +1,7 @@
+# Copyright (c) 2024, Miguel A. Baldi Hörlle <miguel.horlle@gmail.com>. All rights reserved. Use of
+# this source code is governed by the GPL-3.0 license that can be
+# found in the COPYING file.
+
 services:
   krust-cross-win:
     # image id: c191618ca6ff
@@ -5,5 +9,5 @@ services:
     #image: gtk4-cross-rust-4.14.3-1.5.0
     volumes:
       - .:/mnt:z
-    command: bash -c "./win-prepare-and-build.sh"
+    command: bash -c "./build-scripts/win-prepare-and-build.sh"
 

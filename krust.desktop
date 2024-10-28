@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=KRust
+StartupWMClass=io.miguelbaldi.KRust
+Name[pt_BR]=KRust
+Comment=KRust Kafka Client
+Comment[pt_BR]=KRust cliente de Kafka
+Icon=io.miguelbaldi.KRust
+Exec=krust
+Categories=Utility;Development;IDE;
+Terminal=false

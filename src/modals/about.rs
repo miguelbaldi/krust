@@ -1,3 +1,7 @@
+// Copyright (c) 2024, Miguel A. Baldi Hörlle <miguel.horlle@gmail.com>. All rights reserved. Use of
+// this source code is governed by the GPL-3.0 license that can be
+// found in the COPYING file.
+
 use fs_extra::dir::get_size;
 use gtk::prelude::GtkWindowExt;
 use humansize::{format_size, DECIMAL};
@@ -22,7 +26,7 @@ impl SimpleComponent for AboutDialog {
             //.application_icon("/org/miguelbaldi/krust/logo.png")
             .application_icon(APP_ID)
             // Insert your license of choice here
-            .license_type(gtk::License::MitX11)
+            .license_type(gtk::License::Gpl30)
             // Insert your website here
             .website("https://github.com/miguelbaldi/krust")
             // Insert your Issues page

@@ -43,4 +43,5 @@ krust-setup.exe
 libs/
 package.zip
 *.log
-LICENSE-win.md
+LICENSE
+*.bak
