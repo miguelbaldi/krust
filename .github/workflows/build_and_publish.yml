@@ -35,8 +35,8 @@ jobs:
           cargo install cargo-deb
       - name: Build
         run: |
-          pwd
-          cargo deb --deb-version "$(date +%Y%m%d%H%M%S)-$(git describe)"
+          source version.sh
+          cargo deb --deb-version "$GIT_TAG_LATEST"
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
