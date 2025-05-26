@@ -15,8 +15,6 @@ use crate::{
 use super::lists::HeaderListItem;
 
 #[derive(Debug)]
-pub struct MessageViewerInit {}
-#[derive(Debug)]
 pub enum MessageViewerMsg {
     Open(String, Vec<KrustHeader>),
     Clear,

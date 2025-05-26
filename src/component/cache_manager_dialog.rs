@@ -415,7 +415,7 @@ impl Component for CacheManagerDialogModel {
                 self.topics_wrapper.clear();
                 let mut disks = Disks::new_with_refreshed_list();
                 let settings = Settings::read().unwrap_or_default();
-                self.cache_dir = settings.cache_dir.clone();
+                self.cache_dir.clone_from(&settings.cache_dir);
                 self.load_disk_usage_info(settings, widgets, &mut disks);
                 let cache_dir_path = Path::new(&self.cache_dir);
                 let cache_dir_size = get_size(cache_dir_path).unwrap_or(0) as usize;

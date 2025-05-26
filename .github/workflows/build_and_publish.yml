@@ -35,7 +35,7 @@ jobs:
           cargo install cargo-deb
       - name: Build
         run: |
-          cargo deb --deb-version $(git describe)
+          cargo deb --deb-version "$(git describe --always)"
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:

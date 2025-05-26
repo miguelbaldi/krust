@@ -2,6 +2,7 @@
 // this source code is governed by the GPL-3.0 license that can be
 // found in the COPYING file.
 
+use chrono::Utc;
 use directories::ProjectDirs;
 use rdkafka::error::KafkaError;
 use ron::de::SpannedError;
@@ -22,6 +23,8 @@ pub enum ExternalError {
     FileSystemError(#[from] std::io::Error),
     #[error(transparent)]
     DatabaseError(#[from] rusqlite::Error),
+    #[error(transparent)]
+    DatabaseMigrationError(#[from] rusqlite_migration::Error),
     #[error(transparent)]
     KafkaUnexpectedError(#[from] KafkaError),
     #[error("headers serialization error")]
@@ -48,9 +51,6 @@ pub struct State {
 
     /// Height of the main window at startup.
     pub height: i32,
-
-    /// Panned separator position
-    pub separator_position: i32,
 
     /// Whether the window should be maximized at startup.
     pub is_maximized: bool,
@@ -97,16 +97,19 @@ impl Default for State {
         State {
             width,
             height: 600,
-            separator_position: ((width as f32) * 0.25).round() as i32,
             is_maximized: false,
         }
     }
 }
-
 pub fn database_connection() -> Result<Connection, ExternalError> {
-    database_connection_with_name(&ensure_app_config_dir()?, &"application".to_string())
+    database_connection_with_name(&"application".to_string())
 }
-pub fn database_connection_with_name(
+pub fn database_connection_with_name(database_name: &String) -> Result<Connection, ExternalError> {
+    let path = &ensure_app_config_dir()?;
+    let data_file = ensure_path_dir(path)?.join(format!("{}.db", database_name));
+    database_connection_from_file(&data_file)
+}
+pub fn database_connection_with_name_and_path(
     path: &PathBuf,
     database_name: &String,
 ) -> Result<Connection, ExternalError> {
@@ -119,6 +122,31 @@ pub fn database_connection_with_name(
     )
     .map_err(ExternalError::DatabaseError)
 }
+
+pub fn database_connection_from_file(file: &PathBuf) -> Result<Connection, ExternalError> {
+    Connection::open_with_flags(
+        file,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_CREATE
+            | OpenFlags::SQLITE_OPEN_URI,
+    )
+    .map_err(ExternalError::DatabaseError)
+}
+pub fn backup_database() -> Result<String, ExternalError> {
+    backup_database_with_name(&ensure_app_config_dir()?, &"application".to_string())
+}
+pub fn backup_database_with_name(
+    path: &PathBuf,
+    database_name: &String,
+) -> Result<String, ExternalError> {
+    let data_file = ensure_path_dir(path)?.join(format!("{}.db", database_name));
+    let backup_name = format!("{}-{}.bak", database_name, Utc::now().timestamp_millis());
+    let backup_filename = format!("{}.db", backup_name);
+    let backup_file = path.join(backup_filename);
+    fs::copy(data_file, backup_file.clone())
+        .map(|_| backup_name)
+        .map_err(ExternalError::FileSystemError)
+}
 pub fn destroy_database_with_name(
     path: PathBuf,
     database_name: &String,
@@ -126,7 +154,9 @@ pub fn destroy_database_with_name(
     let data_file = path.join(format!("{}.db", database_name));
     fs::remove_file(data_file).map_err(ExternalError::FileSystemError)
 }
-
+pub fn destroy_database() -> Result<(), ExternalError> {
+    destroy_database_with_name(ensure_app_config_dir()?, &"application".to_string())
+}
 pub fn app_config_dir() -> Result<PathBuf, ExternalError> {
     let dirs = ProjectDirs::from(KRUST_QUALIFIER, KRUST_ORGANIZATION, KRUST_APPLICATION)
         .ok_or_else(|| {

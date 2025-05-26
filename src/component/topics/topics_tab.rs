@@ -548,7 +548,7 @@ impl FactoryComponent for TopicsTabModel {
                                         if let Some(t) = topics_map.get(&topic.name) {
                                             debug!("found topic: {:?}", t);
                                             topic.favourite = t.favourite;
-                                            topic.cached = t.cached.clone();
+                                            topic.cached.clone_from(&t.cached);
                                         }
                                     }
                                     TOASTER_BROKER.send(AppMsg::HideToast(id.to_string()));

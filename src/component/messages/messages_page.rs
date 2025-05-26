@@ -3,7 +3,6 @@
 // this source code is governed by the GPL-3.0 license that can be
 // found in the COPYING file.
 
-
 // See: https://gitlab.gnome.org/GNOME/gtk/-/issues/5644
 use crate::{
     backend::repository::{KrustConnection, KrustTopic},
@@ -323,7 +322,7 @@ impl MessagesPageModel {
                 );
                 info!("PageClosed [{}][{}={}]", i, title, page.title());
                 if title.eq(&page.title().to_string()) {
-                    model = tp.topic.clone();
+                    model.clone_from(&tp.topic);
                     break;
                 }
             }

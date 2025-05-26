@@ -12,7 +12,7 @@ use relm4::{
     abstractions::Toaster,
     actions::{RelmAction, RelmActionGroup},
     factory::FactoryVecDeque,
-    main_adw_application, main_application,
+    main_adw_application,
     prelude::*,
     MessageBroker,
 };
@@ -370,41 +370,7 @@ impl Component for AppModel {
             cache_manager_dialog,
         };
         widgets.load_window_size();
-        // DEBUG: start
-        let main_window = main_application().active_window().unwrap();
-        let surface = main_window.surface();
-        if let Some(surface) = surface {
-            let toplevel = surface.downcast::<gtk::gdk::Toplevel>();
-            if let Ok(toplevel) = toplevel {
-                info!("TOPLEVEL::{:?}", toplevel);
-                toplevel.connect_layout(|_surface, _width, _height| {
-                    //trace!("TOPLEVEL::LAYOUT::[width={},height={}]", width, height);
-                });
-                toplevel.connect_enter_monitor(|_surface, monitor| {
-                    //trace!("TOPLEVEL::ENTER_MONITOR::[monitor={:?}]", monitor);
-                    if let Some(_description) = monitor.description() {
-                        //trace!("TOPLEVEL::ENTER_MONITOR::[description={}]", description.to_string());
-                    }
-                    if let Some(_connector) = monitor.connector() {
-                        //trace!("TOPLEVEL::ENTER_MONITOR::[connector={}]", connector.to_string());
-                    }
-                });
-                toplevel.connect_leave_monitor(|_surface, monitor| {
-                    //trace!("TOPLEVEL::LEAVE_MONITOR::[monitor={:?}]", monitor);
-                    if let Some(_description) = monitor.description() {
-                        //trace!("TOPLEVEL::LEAVE_MONITOR::[description={}]", description.to_string());
-                    }
-                    if let Some(_connector) = monitor.connector() {
-                        // trace!("TOPLEVEL::LEAVE_MONITOR::[connector={}]", connector.to_string());
-                    }
-                });
-                // toplevel.connect_compute_size(|tl, cs| {
-                //     let bounds = cs.bounds();
-                //     info!("TOPLEVEL::BOUNDS::{:?}", bounds);
-                // });
-            }
-        };
-        // DEBUG: end
+
         ComponentParts { model, widgets }
     }
 
@@ -594,15 +560,9 @@ impl AppModelWidgets {
     fn save_window_size(&self) -> Result<(), glib::BoolError> {
         let (width, height) = self.main_window.default_size();
         let is_maximized = self.main_window.is_maximized();
-        // let separator = if self.main_paned.position() < 405 {
-        //     405
-        // } else {
-        //     self.main_paned.position()
-        // };
         let new_state = State {
             width,
             height,
-            separator_position: 300,
             is_maximized,
         };
 
@@ -639,11 +599,9 @@ impl AppModelWidgets {
             .unwrap_or_default();
         let width = &state.width;
         let height = &state.height;
-        let _paned_position = &state.separator_position;
         let is_maximized = &state.is_maximized;
 
         self.main_window.set_default_size(*width, *height);
-        //self.main_paned.set_position(*paned_position);
 
         if *is_maximized {
             info!("should maximize");

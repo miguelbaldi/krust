@@ -45,3 +45,4 @@ package.zip
 *.log
 LICENSE
 *.bak
+.zed/

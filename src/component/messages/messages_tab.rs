@@ -442,7 +442,7 @@ impl FactoryComponent for MessagesTabModel {
                                 set_width_chars: 10,
                                 set_numeric: true,
                                 set_increments: (1000.0, 10000.0),
-                                set_range: (1.0, 100000.0),
+                                set_range: (1.0, 500000.0),
                                 set_value: self.max_messages,
                                 set_digits: 0,
                                 connect_value_changed[sender] => move |sbtn| {
@@ -1068,7 +1068,7 @@ impl FactoryComponent for MessagesTabModel {
                 let settings = Settings::read().unwrap_or_default();
                 let timestamp_formatter = settings.timestamp_formatter();
                 let total = response.total;
-                self.topic = response.topic.clone();
+                self.topic.clone_from(&response.topic);
                 self.cache_settings = self.topic.clone().and_then(|t| t.cached);
                 match self.mode {
                     MessagesMode::Live => info!("no need to cleanup list on live mode"),

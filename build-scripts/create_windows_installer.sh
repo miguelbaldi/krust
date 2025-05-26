@@ -6,6 +6,7 @@ docker rm setup
 docker container create --name setup amake/innosetup setup.iss
 docker cp ./package setup:/work/
 docker cp data/images/krust.ico setup:/work/krust.ico
+cp setup.iss{,.bak}
 export MY_VERSION=$(git describe)
 sed -i "s/MY_VERSION/$MY_VERSION/g" setup.iss
 docker cp setup.iss setup:/work/
@@ -14,4 +15,5 @@ docker cp LICENSE setup:/work/LICENSE
 docker start -i -a setup
 docker cp setup:/work/Output/. .
 docker rm setup
+mv -f setup.iss.bak setup.iss
 zip -r package.zip package
