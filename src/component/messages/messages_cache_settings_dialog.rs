@@ -397,7 +397,7 @@ impl Component for MessagesCacheSettingsDialogModel {
                 let conn_id = self.connection.id.expect("should have connection");
                 let mut repo = Repository::new();
                 let maybe_topic = repo.find_topic(conn_id, &topic_name);
-                self.topic = maybe_topic.clone();
+                self.topic.clone_from(&maybe_topic);
                 if maybe_topic.is_some() {
                     sender.input(MessagesCacheSettingsDialogMsg::Show);
                 }

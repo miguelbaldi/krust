@@ -2,7 +2,7 @@
 // this source code is governed by the GPL-3.0 license that can be
 // found in the COPYING file.
 
-use std::cell::RefCell;
+use std::{cell::RefCell, fmt::Display};
 
 use adw::prelude::*;
 use gtk::{gdk::DisplayManager, glib::SignalHandlerId};
@@ -29,13 +29,14 @@ impl MultiFormat {
     }
 }
 
-impl ToString for MultiFormat {
-    fn to_string(&self) -> String {
-        match self {
+impl Display for MultiFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
             Self::Key => "Key".to_string(),
             Self::Value => "Value".to_string(),
             Self::KeyValue => "Key and Value".to_string(),
-        }
+        };
+        write!(f, "{}", label)
     }
 }
 

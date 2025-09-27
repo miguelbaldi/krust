@@ -31,11 +31,12 @@ jobs:
         run: git fetch --update-head-ok -f origin ${{ github.ref }}:${{ github.ref }}
       - name: Install system dependencies
         run: |
-          sudo apt-get install -y pkg-config libgtk-4-dev libadwaita-1-dev libsasl2-dev libgtksourceview-5-dev openssl
+          sudo apt-get update && sudo apt-get install -y pkg-config libgtk-4-dev libadwaita-1-dev libsasl2-dev libgtksourceview-5-dev openssl
           cargo install cargo-deb
       - name: Build
         run: |
-          cargo deb --deb-version $(git describe)
+          source version.sh
+          cargo deb --deb-version "$GIT_TAG_LATEST"
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:

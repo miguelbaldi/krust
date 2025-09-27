@@ -47,6 +47,6 @@ cp -rfv /tmp/mingw64/share/gir-1.0/ package/share/
 export CHRONO_TZ_TIMEZONE_FILTER="(GMT|UTC|Brazil/.*)"
 git config --global --add safe.directory /mnt
 git config --global --list
-git describe
+git log -n 1
 . ~/.cargo/env && rustup target add x86_64-pc-windows-gnu
 build && package
