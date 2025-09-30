@@ -3,9 +3,8 @@
 # found in the COPYING file.
 
 services:
-  gtk4-rs:
-    image: ghcr.io/miguelbaldi/relm4-docker:latest-appimage
+  krust-deb-build:
+    image: ubuntu:25.04
     volumes:
       - .:/mnt:z
-    command: bash -c "./build-scripts/linux-rpm-prepare-and-build.sh"
-
+    command: bash -c "cd /mnt && ./build-scripts/linux-deb-prepare-and-build.sh"
