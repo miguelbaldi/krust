@@ -290,7 +290,7 @@ impl Component for MessagesSendDialogModel {
                 root.set_content_height(dialog_height);
                 root.set_content_width(dialog_width);
                 root.queue_allocate();
-                root.present(parent);
+                root.present(Some(parent));
             }
             MessagesSendDialogMsg::Cancel => {
                 root.close();

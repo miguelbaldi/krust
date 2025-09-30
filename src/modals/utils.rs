@@ -17,7 +17,7 @@ pub(crate) fn show_error_alert(parent: &impl IsA<gtk::Widget>, message: String) 
         .build();
     alert.add_response("close", "Ok");
     alert.set_response_appearance("close", adw::ResponseAppearance::Destructive);
-    alert.present(parent);
+    alert.present(Some(parent));
 }
 
 pub(crate) fn build_confirmation_alert(
