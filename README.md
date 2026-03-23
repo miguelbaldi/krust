@@ -35,8 +35,8 @@ untested, but if you can get the system dependencies to build, `KRust` should wo
 
     #### Fedora
 
-    ```
-    $ dnf install -y gtk4 libadwaita-devel cyrus-sasl-devel openssl-devel
+    ```sh
+    $ dnf install cyrus-sasl-devel openssl-devel cmake glib2-devel gtk4-devel libadwaita-devel gtksourceview5-devel
     ```
 
     #### Ubuntu

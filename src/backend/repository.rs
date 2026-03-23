@@ -135,6 +135,17 @@ pub struct KrustHeader {
     pub value: Option<String>,
 }
 
+impl Display for KrustHeader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}:{}",
+            self.key,
+            self.value.clone().unwrap_or("".to_string())
+        )
+    }
+}
+
 #[derive(Clone)]
 pub struct MessagesRepository {
     pub topic_name: String,
