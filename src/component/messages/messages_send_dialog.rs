@@ -6,13 +6,16 @@ use std::{cell::RefCell, fmt::Display};
 
 use adw::prelude::*;
 use gtk::{gdk::DisplayManager, glib::SignalHandlerId};
-use relm4::*;
+use relm4::{typed_view::column::TypedColumnView, *};
 use relm4_components::simple_adw_combo_row::{SimpleComboRow, SimpleComboRowMsg};
 use tracing::*;
 
-use crate::backend::{
-    kafka::KafkaBackend,
-    repository::{KrustConnection, KrustMessage, KrustTopic},
+use crate::{
+    backend::{
+        kafka::KafkaBackend,
+        repository::{KrustConnection, KrustHeader, KrustMessage, KrustTopic},
+    },
+    component::messages::lists::{HeaderListItem, HeaderNameColumn, HeaderValueColumn},
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -50,6 +53,7 @@ pub struct MessagesSendDialogModel {
     pub selected_multi_format: Option<MultiFormat>,
     pub is_multiple: bool,
     pub signal_handlers: Vec<RefCell<Option<SignalHandlerId>>>,
+    pub headers_wrapper: TypedColumnView<HeaderListItem, gtk::SingleSelection>,
 }
 
 #[derive(Debug)]
@@ -63,6 +67,8 @@ pub enum MessagesSendDialogMsg {
     Send,
     RecalculateDialogSize,
     Close,
+    AddHeader,
+    RemoveHeader,
 }
 
 #[derive(Debug)]
@@ -141,6 +147,57 @@ impl Component for MessagesSendDialogModel {
                             set_text: ",",
                             set_visible: false,
                         }
+                    },
+                    #[name(message_headers)]
+                    adw::PreferencesGroup {
+                        set_title: "Headers",
+                        set_margin_top: 10,
+                        set_vexpand: false,
+                        set_hexpand: true,
+                        gtk::Box {
+                            set_hexpand: true,
+                            set_margin_bottom: 10,
+                            set_orientation: gtk::Orientation::Horizontal,
+                            set_spacing: 5,
+                            #[name(header_name_entry)]
+                            adw::EntryRow {
+                                set_title: "Header name",
+                            },
+                            #[name(header_value_entry)]
+                            adw::EntryRow {
+                                set_title: "Header value",
+                            },
+                            gtk::Button {
+                                set_label: "Add",
+                                //add_css_class: "destructive-action",
+                                connect_clicked[sender] => move |_| {
+                                    sender.input(MessagesSendDialogMsg::AddHeader);
+                                },
+                            },
+                            gtk::Button {
+                                set_label: "Remove",
+                                add_css_class: "destructive-action",
+                                connect_clicked[sender] => move |_| {
+                                    sender.input(MessagesSendDialogMsg::RemoveHeader);
+                                },
+                            }
+                        },
+                        #[name(message_headers_container)]
+                        gtk::ScrolledWindow {
+                            set_vexpand: false,
+                            set_hexpand: true,
+                            set_propagate_natural_height: true,
+                            set_overflow: gtk::Overflow::Hidden,
+                            set_valign: gtk::Align::Start,
+                            add_css_class: "entry",
+                            #[local_ref]
+                            headers_view -> gtk::ColumnView {
+                                set_vexpand: true,
+                                set_hexpand: true,
+                                set_show_row_separators: true,
+                                set_show_column_separators: true,
+                            },
+                        },
                     },
                     #[name(single_message_key_group)]
                     adw::PreferencesGroup {
@@ -247,6 +304,10 @@ impl Component for MessagesSendDialogModel {
                 sender.input_sender(),
                 MessagesSendDialogMsg::MultiFormatSelected,
             );
+        let mut headers_wrapper = TypedColumnView::<HeaderListItem, gtk::SingleSelection>::new();
+        headers_wrapper.append_column::<HeaderNameColumn>();
+        headers_wrapper.append_column::<HeaderValueColumn>();
+        let headers_view = headers_wrapper.view.clone();
         let model = MessagesSendDialogModel {
             connection,
             topic,
@@ -256,6 +317,7 @@ impl Component for MessagesSendDialogModel {
             selected_multi_format: None,
             is_multiple: false,
             signal_handlers: vec![],
+            headers_wrapper: headers_wrapper,
         };
         let partitions_combo = model.partitions_combo.widget();
         let multi_format_combo = model.multi_format_combo.widget();
@@ -345,6 +407,27 @@ impl Component for MessagesSendDialogModel {
                     .get_active_elem()
                     .unwrap_or(&MultiFormat::default());
                 self.selected_multi_format = Some(selected_format);
+            }
+            MessagesSendDialogMsg::AddHeader => {
+                let header_name = widgets.header_name_entry.text().to_string();
+                let header_value = widgets.header_value_entry.text().to_string();
+                if !header_name.is_empty() {
+                    let header = KrustHeader {
+                        key: header_name.clone(),
+                        value: Some(header_value.clone()),
+                    };
+                    self.headers_wrapper
+                        .append(HeaderListItem::new(header.clone()));
+                    widgets.header_name_entry.set_text("");
+                    widgets.header_value_entry.set_text("");
+                    info!("Adding message header[{}]...", header.clone());
+                }
+            }
+            MessagesSendDialogMsg::RemoveHeader => {
+                if !self.headers_wrapper.is_empty() {
+                    let selected_header = self.headers_wrapper.selection_model.selected();
+                    self.headers_wrapper.remove(selected_header);
+                }
             }
         };
 
@@ -494,6 +577,14 @@ impl MessagesSendDialogModel {
                 .collect(),
             MultiFormat::KeyValue => self.get_key_value(widgets, true),
         };
+        let mut selected_headers = vec![];
+        for i in 0..self.headers_wrapper.selection_model.n_items() {
+            let item = self.headers_wrapper.get_visible(i).unwrap();
+            selected_headers.push(KrustHeader {
+                key: item.borrow().name.clone(),
+                value: item.borrow().value.clone(),
+            });
+        }
         let messages: Vec<KrustMessage> = messages
             .iter()
             .map(|m| KrustMessage {
@@ -503,7 +594,7 @@ impl MessagesSendDialogModel {
                 key: Some(m.0.clone()),
                 value: m.1.clone(),
                 timestamp: None,
-                headers: vec![],
+                headers: selected_headers.clone(),
             })
             .collect();
         debug!("sending messages::{:?}", &messages);
@@ -620,6 +711,15 @@ impl MessagesSendDialogModel {
         let topic = self.topic.clone().unwrap().name;
         let key = self.get_key(widgets, false);
         let value = self.get_value(widgets, false);
+        let mut selected_headers = vec![];
+        for i in 0..self.headers_wrapper.selection_model.n_items() {
+            let item = self.headers_wrapper.get_visible(i).unwrap();
+            selected_headers.push(KrustHeader {
+                key: item.borrow().name.clone(),
+                value: item.borrow().value.clone(),
+            });
+        }
+        info!("Headers size: {}", selected_headers.len());
         if !value.is_empty() {
             let message = KrustMessage {
                 topic: topic.clone(),
@@ -628,7 +728,7 @@ impl MessagesSendDialogModel {
                 key: key.first().cloned(),
                 value: value.first().unwrap().to_string(),
                 timestamp: None,
-                headers: vec![],
+                headers: selected_headers.clone(),
             };
             let connection = self.connection.clone().unwrap();
             let messages = vec![message];
