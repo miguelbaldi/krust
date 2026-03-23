@@ -517,7 +517,7 @@ impl FactoryComponent for TopicsTabModel {
                 }
             }
             TopicsTabMsg::DeleteTopic => {
-                self.confirmation_alert.present(&widgets.root);
+                self.confirmation_alert.present(Some(&widgets.root));
             }
             TopicsTabMsg::Search(term) => {
                 self.topics_wrapper.clear_filters();

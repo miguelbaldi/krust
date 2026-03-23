@@ -242,7 +242,7 @@ impl Component for AppModel {
         let toaster = Toaster::default();
         let toast_overlay = toaster.overlay_widget();
         let about_dialog = AboutDialog::builder()
-            .transient_for(&root)
+            //.transient_for(&root)
             .launch(())
             .detach();
 
@@ -351,13 +351,14 @@ impl Component for AppModel {
             close_dialog: Alert::builder()
                 .transient_for(&root)
                 .launch(AlertSettings {
-                    text: String::from("Do you want to close before saving?"),
+                    text: Some(String::from("Do you want to close before saving?")),
                     secondary_text: Some(String::from("All unsaved changes will be lost")),
                     confirm_label: Some(String::from("Close")),
                     cancel_label: Some(String::from("Cancel")),
                     option_label: None,
                     is_modal: true,
                     destructive_accept: true,
+                    extra_child: None,
                 })
                 .forward(sender.input_sender(), convert_alert_response),
             _about_dialog: about_dialog,
@@ -579,10 +580,10 @@ impl AppModelWidgets {
             1510.0,
             adw::LengthUnit::Px,
         ));
-        breakpoint.add_setter(&self.main_paned, "collapsed", &true.to_value());
-        breakpoint.add_setter(&self.main_paned, "enable-show-gesture", &true.to_value());
-        breakpoint.add_setter(&self.main_paned, "enable-hide-gesture", &true.to_value());
-        breakpoint.add_setter(&self.toggle_pane_button, "visible", &true.to_value());
+        breakpoint.add_setter(&self.main_paned, "collapsed", Some(&true.to_value()));
+        breakpoint.add_setter(&self.main_paned, "enable-show-gesture", Some(&true.to_value()));
+        breakpoint.add_setter(&self.main_paned, "enable-hide-gesture", Some(&true.to_value()));
+        breakpoint.add_setter(&self.toggle_pane_button, "visible", Some(&true.to_value()));
         let _toggle_sidebar_binding = self
             .toggle_pane_button
             .bind_property("active", &self.main_paned, "show-sidebar")

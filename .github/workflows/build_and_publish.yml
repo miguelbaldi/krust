@@ -24,19 +24,13 @@ jobs:
             target/appimage/*.AppImage
             target/generate-rpm/*.rpm
   build-linux-deb:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Fix tag reference (workaround for https://github.com/actions/checkout/issues/290)
         run: git fetch --update-head-ok -f origin ${{ github.ref }}:${{ github.ref }}
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update && sudo apt-get install -y pkg-config libgtk-4-dev libadwaita-1-dev libsasl2-dev libgtksourceview-5-dev openssl
-          cargo install cargo-deb
-      - name: Build
-        run: |
-          source version.sh
-          cargo deb --deb-version "$GIT_TAG_LATEST"
+      - name: Build (Ubuntu)
+        run: docker compose -f docker-compose.deb.yml up
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:

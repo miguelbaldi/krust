@@ -282,7 +282,7 @@ impl Component for ConnectionPageModel {
                 self.current_index = None;
                 root.queue_allocate();
                 let parent = &relm4::main_application().active_window().unwrap();
-                root.present(parent);
+                root.present(Some(parent));
             }
             ConnectionPageMsg::Save => {
                 let name = widgets.name_entry.text().to_string();
@@ -381,7 +381,7 @@ impl Component for ConnectionPageModel {
                     .set_value(self.timeout.unwrap_or_default());
                 root.queue_allocate();
                 let parent = &relm4::main_application().active_window().unwrap();
-                root.present(parent);
+                root.present(Some(parent));
             }
         };
 

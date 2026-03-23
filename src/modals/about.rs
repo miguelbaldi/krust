@@ -3,7 +3,7 @@
 // found in the COPYING file.
 
 use fs_extra::dir::get_size;
-use gtk::prelude::GtkWindowExt;
+use adw::prelude::AdwDialogExt;
 use humansize::{format_size, DECIMAL};
 use relm4::{adw, gtk, ComponentParts, ComponentSender, SimpleComponent};
 use sysinfo::Disks;
@@ -16,13 +16,13 @@ pub struct AboutDialog {}
 
 impl SimpleComponent for AboutDialog {
     type Init = ();
-    type Widgets = adw::AboutWindow;
+    type Widgets = adw::AboutDialog;
     type Input = ();
     type Output = ();
-    type Root = adw::AboutWindow;
+    type Root = adw::AboutDialog;
 
     fn init_root() -> Self::Root {
-        let about = adw::AboutWindow::builder()
+        let about = adw::AboutDialog::builder()
             //.application_icon("/org/miguelbaldi/krust/logo.png")
             .application_icon(APP_ID)
             // Insert your license of choice here
@@ -37,7 +37,7 @@ impl SimpleComponent for AboutDialog {
             .copyright("© 2024 Miguel A. Baldi Hörlle")
             .developers(vec!["Miguel A. Baldi Hörlle"])
             .designers(vec!["Miguel A. Baldi Hörlle"])
-            .hide_on_close(true)
+            //.hide_on_close(true)
             .build();
         let ack = &[
             "Adelar Escobar Vieira",
@@ -74,6 +74,6 @@ impl SimpleComponent for AboutDialog {
                 format_size(disk.total_space(), DECIMAL),
             );
         }
-        dialog.present();
+        dialog.present(Option::<&gtk::Widget>::None);
     }
 }

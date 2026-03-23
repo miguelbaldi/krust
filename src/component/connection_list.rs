@@ -197,7 +197,7 @@ impl FactoryComponent for ConnectionListModel {
             KrustConnectionMsg::Remove => {
                 info!("Delete request for {}", self.name);
                 let main_window = main_application().active_window().unwrap();
-                self.confirm_delete_alert.present(&main_window);
+                self.confirm_delete_alert.present(Some(&main_window));
             }
             KrustConnectionMsg::Refresh => {
                 widgets.label.set_label(&self.name);

@@ -409,7 +409,7 @@ impl Component for CacheManagerDialogModel {
                 let parent = &relm4::main_application().active_window().unwrap();
                 sender.input(CacheManagerDialogMsg::Refresh);
                 root.queue_allocate();
-                root.present(parent);
+                root.present(Some(parent));
             }
             CacheManagerDialogMsg::Refresh => {
                 self.topics_wrapper.clear();
@@ -419,32 +419,38 @@ impl Component for CacheManagerDialogModel {
                 self.load_disk_usage_info(settings, widgets, &mut disks);
                 let cache_dir_path = Path::new(&self.cache_dir);
                 let cache_dir_size = get_size(cache_dir_path).unwrap_or(0) as usize;
-                let paths = fs::read_dir(cache_dir_path).unwrap();
-                for path in paths {
-                    let file = path.unwrap();
-                    let file_name = file.file_name();
-                    let cache_size = get_size(file.path()).unwrap_or(0) as usize;
-                    let cache_size_formatted =
-                        format_size(get_size(file.path()).unwrap_or(0), DECIMAL);
-                    let repo = MessagesRepository::from_filename(
-                        file_name.to_str().unwrap_or_default().to_string(),
-                    );
-                    let conn = Repository::new().connection_by_id(repo.connection_id);
-                    if let Some(conn) = conn {
-                        let item = TopicListItem::new(
-                            repo.topic_name,
-                            conn.name,
-                            conn.id.unwrap_or_default(),
-                            cache_dir_size,
-                            cache_size,
-                            sender.clone(),
-                        );
-                        self.topics_wrapper.append(item);
-                        info!(
-                            "Name: {} - {}",
-                            file_name.to_str().unwrap_or_default(),
-                            cache_size_formatted,
-                        );
+                match fs::read_dir(cache_dir_path) {
+                    Ok(paths) => {
+                        for path in paths {
+                            let file = path.unwrap();
+                            let file_name = file.file_name();
+                            let cache_size = get_size(file.path()).unwrap_or(0) as usize;
+                            let cache_size_formatted =
+                                format_size(get_size(file.path()).unwrap_or(0), DECIMAL);
+                            let repo = MessagesRepository::from_filename(
+                                file_name.to_str().unwrap_or_default().to_string(),
+                            );
+                            let conn = Repository::new().connection_by_id(repo.connection_id);
+                            if let Some(conn) = conn {
+                                let item = TopicListItem::new(
+                                    repo.topic_name,
+                                    conn.name,
+                                    conn.id.unwrap_or_default(),
+                                    cache_dir_size,
+                                    cache_size,
+                                    sender.clone(),
+                                );
+                                self.topics_wrapper.append(item);
+                                info!(
+                                    "Name: {} - {}",
+                                    file_name.to_str().unwrap_or_default(),
+                                    cache_size_formatted,
+                                );
+                            }
+                        }
+                    }
+                    Err(_e) => {
+                        info!("Path not found...")
                     }
                 }
             }

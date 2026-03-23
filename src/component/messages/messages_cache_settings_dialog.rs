@@ -262,7 +262,7 @@ impl Component for MessagesCacheSettingsDialogModel {
                                         },
                                         #[name(time_hours)]
                                         gtk::SpinButton {
-                                            set_xalign: 0.5,
+                                            //set_xalign: 0.5,
                                             set_orientation: gtk::Orientation::Vertical,
                                             set_wrap: true,
                                             set_numeric: true,
@@ -276,7 +276,7 @@ impl Component for MessagesCacheSettingsDialogModel {
                                         gtk::Label { set_label: ":", set_margin_start: 2, set_margin_end: 2, },
                                         #[name(time_minutes)]
                                         gtk::SpinButton {
-                                            set_xalign: 0.5,
+                                            //set_xalign: 0.5,
                                             set_orientation: gtk::Orientation::Vertical,
                                             set_wrap: true,
                                             set_numeric: true,
@@ -290,7 +290,7 @@ impl Component for MessagesCacheSettingsDialogModel {
                                         gtk::Label { set_label: ":", set_margin_start: 2, set_margin_end: 2, },
                                         #[name(time_seconds)]
                                         gtk::SpinButton {
-                                            set_xalign: 0.5,
+                                            //set_xalign: 0.5,
                                             set_orientation: gtk::Orientation::Vertical,
                                             set_wrap: true,
                                             set_numeric: true,
@@ -475,7 +475,7 @@ impl Component for MessagesCacheSettingsDialogModel {
 
                     let parent = &relm4::main_application().active_window().unwrap();
                     root.queue_allocate();
-                    root.present(parent);
+                    root.present(Some(parent));
                 };
             }
             MessagesCacheSettingsDialogMsg::RefreshTopicMessagesCounter => {
@@ -527,7 +527,7 @@ impl Component for MessagesCacheSettingsDialogModel {
                     let updated_cache = repo.find_topic_cache(conn_id, topic_name);
                     if let Some(cache) = updated_cache.clone() {
                         debug!("already has cache, asking for confirmation::{:?}", &cache);
-                        self.confirmation_alert.present(&widgets.main_dialog);
+                        self.confirmation_alert.present(Some(&widgets.main_dialog));
                     } else {
                         sender.input(MessagesCacheSettingsDialogMsg::ConfirmApplySettings);
                     }

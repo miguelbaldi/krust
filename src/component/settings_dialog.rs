@@ -294,7 +294,7 @@ impl Component for SettingsDialogModel {
                 self.messages_sort_column_order_combo
                     .emit(SimpleComboRowMsg::SetActiveIdx(combo_idx));
                 root.queue_allocate();
-                root.present(parent);
+                root.present(Some(parent));
             }
             SettingsDialogMsg::Ignore => {}
             SettingsDialogMsg::ChooseCacheDirRequest => {

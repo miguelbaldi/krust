@@ -172,7 +172,7 @@ impl Component for CreateTopicDialogModel {
             CreateTopicDialogMsg::Show => {
                 let parent = &relm4::main_application().active_window().unwrap();
                 root.queue_allocate();
-                root.present(parent);
+                root.present(Some(parent));
             }
             CreateTopicDialogMsg::Cancel => {
                 root.close();
